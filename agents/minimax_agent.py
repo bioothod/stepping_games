@@ -12,7 +12,7 @@ class Agent(lookahead_agent.Agent):
 
     def score_move_minimax(self, grid, column, mark, nsteps):
         next_grid = self.drop_piece(grid, column, mark)
-        score = self.minimax(next_grid, nsteps-1, False, mark)
+        score = self.minimax(next_grid, nsteps-1, False, mark, -np.Inf)
         return score
 
     def is_terminal_node(self, grid):
@@ -27,7 +27,7 @@ class Agent(lookahead_agent.Agent):
 
         return False
 
-    def minimax(self, node, depth, maximizing_player, player):
+    def minimax(self, node, depth, maximizing_player, player, up_value):
         valid_moves = [c for c in range(self.config.columns) if node[0][c] == 0]
 
         if depth == 0 or self.is_terminal_node(node):
@@ -39,16 +39,18 @@ class Agent(lookahead_agent.Agent):
             value = -np.Inf
             for column in valid_moves:
                 child = self.drop_piece(node, column, player)
-                value = max(value, self.minimax(child, depth-1, False, player))
-
-            return value
+                value = max(value, self.minimax(child, depth-1, False, player, value))
+                if value >= up_value:
+                    break
         else:
             value = np.Inf
             for column in valid_moves:
                 child = self.drop_piece(node, column, other_player)
-                value = min(value, self.minimax(child, depth-1, True, player))
+                value = min(value, self.minimax(child, depth-1, True, player, value))
+                if value <= up_value:
+                    break
 
-            return value
+        return value
 
     def action(self, obs):
         if sum(obs.board) == 0:
@@ -58,7 +60,8 @@ class Agent(lookahead_agent.Agent):
 
         grid = np.asarray(obs.board).reshape(self.config.rows, self.config.columns)
 
-        scores = dict(zip(valid_moves, [self.score_move_minimax(grid, column, obs.mark, 3) for column in valid_moves]))
+        n_steps = 4
+        scores = dict(zip(valid_moves, [self.score_move_minimax(grid, column, obs.mark, n_steps) for column in valid_moves]))
 
         max_cols = [key for key in scores.keys() if scores[key] == max(scores.values())]
 
