@@ -4,21 +4,25 @@ import torch.nn as nn
 
 class DDQN(nn.Module):
     def __init__(self, config):
-        self.input_layer = nn.Linear(config.num_features)
+        super().__init__()
 
-        output_features = 64
+        hidden_dims = [512, 128]
+        hidden_dims = [config.num_features] + hidden_dims
+        modules = []
+
+        for i in range(1, len(hidden_dims)):
+            input_dim = hidden_dims[i-1]
+            output_dim = hidden_dims[i]
+
+            l = nn.Linear(input_dim, output_dim)
+            modules.append(l)
+            modules.append(nn.GELU())
+            #modules.append(nn.Dropout(0.3))
         
-        self.features = nn.Sequential(
-            nn.Linear(config.num_features, 64),
-            nn.GELU(),
-            nn.Linear(64, 64),
-            nn.GELU(),
-            nn.Linear(64, output_features),
-            nn.GELU(),
-        )
+        self.features = nn.Sequential(*modules)
 
-        self.output_value = nn.Linear(output_features, 1)
-        self.output_adv = nn.Linear(output_features, config.num_actions)
+        self.output_value = nn.Linear(hidden_dims[-1], 1)
+        self.output_adv = nn.Linear(hidden_dims[-1], config.num_actions)
 
     def forward(self, inputs):
         features = self.features(inputs)
