@@ -1,4 +1,3 @@
-import argparse
 import random
 
 from easydict import EasyDict as edict
@@ -48,11 +47,11 @@ class ConnectX:
 def main():
     connect = ConnectX()
 
-    #agent1 = agents.smart_agent.Agent('smart', connect.config)
-    agent2 = agents.minimax_agent.Agent('minimax', connect.config)
-    agent1 = 'negamax'
+    agent2 = agents.monte_carlo_agent.Agent('monte_carlo', connect.config)
+    #agent2 = agents.minimax_agent.Agent('minimax', connect.config)
+    #agent1 = 'negamax'
     #agent1 = agents.monte_carlo_agent.Agent('monte_carlo', connect.config)
-    #agent1 = agents.lookahead_agent.Agent('lookahead', connect.config)
+    agent1 = agents.lookahead_agent.Agent('lookahead', connect.config)
     connect.get_win_percentages(agent1, agent2, 100)
 
 if __name__ == '__main__':
