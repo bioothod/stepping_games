@@ -1,30 +1,28 @@
 import gym
 import random
 
-from easydict import EasyDict as edict
-
 import numpy as np
 
 import kaggle_environments as kaggle
 
 class ConnectXGym(gym.Env):
-    def __init__(self, config, agent1, agent2):
+    def __init__(self, config, other_agent):
         self.config = config
         
         self.env = kaggle.make('connectx', configuration=config, debug=True)
 
-        self.pair = [agent1, agent2]
+        self.pair = [other_agent, None]
 
         self.action_shape = (self.config.columns,)
         self.action_space = gym.spaces.Discrete(self.config.columns)
         self.observation_dtype = np.float32
-        self.observation_space = gym.spaces.Box(low=0, high=2, shape=(self.config.rows, self.columns, 1), dtype=self.observation_dtype)
+        self.observation_space = gym.spaces.Box(low=0, high=2, shape=(self.config.rows, self.config.columns, 1), dtype=self.observation_dtype)
 
         self.reward_range = (-10, 1)
 
         self.session = self.env.train(self.pair)
 
-    def swtich_agents(self):
+    def switch_agents(self):
         self.pair = self.pair[::-1]
         self.session = self.env.train(self.pair)
 
@@ -38,7 +36,12 @@ class ConnectXGym(gym.Env):
 
     def create_state(self, obs):
         state = np.asarray(obs['board'])
-        state = state.reshape(self.config.rows, self.columns, 1)
+        state = state.reshape(self.config.rows, self.config.columns)
+
+        # add channels
+        state = np.expand_dims(state, 0)
+
+        # make sure it is np.float32
         state = state.astype(np.float32)
         return state
     
@@ -54,9 +57,10 @@ class ConnectXGym(gym.Env):
     def step(self, action):
         int_action = int(action)
 
-        is_valid = self.state[:, int_action, :] == 0
+        is_valid = self.state[:, 0, int_action] == 0
+        #print(f'action: {action}, is_valid: {is_valid}')
 
-        if is_valid:
+        if np.all(is_valid):
             obs, old_reward, done, _ = self.session.step(int_action)
             reward = self.change_reward(old_reward, done)
             self.state = self.create_state(obs)

@@ -8,7 +8,7 @@ def setup_logger(logname, logfile, log_to_stdout):
     logger.propagate = False
     logger.setLevel(logging.INFO)
 
-    fmt = logging.Formatter(fmt='%(asctime)s.%(msecs)03d: %(message)s', datefmt='%d/%m/%y %H:%M:%S')
+    fmt = logging.Formatter(fmt='%(asctime)s.%(msecs)03d: %(name)s: %(message)s', datefmt='%d/%m/%y %H:%M:%S')
 
     if logfile:
         handler = logging.FileHandler(logfile, 'a')

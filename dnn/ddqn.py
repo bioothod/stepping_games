@@ -16,8 +16,7 @@ class DDQN(nn.Module):
 
             l = nn.Linear(input_dim, output_dim)
             modules.append(l)
-            modules.append(nn.GELU())
-            #modules.append(nn.Dropout(0.3))
+            modules.append(nn.ReLU(inplace=True))
         
         self.features = nn.Sequential(*modules)
 

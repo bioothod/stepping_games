@@ -1,1 +1,4 @@
-from . import empty_model, simple_model
+from . import empty_model
+from . import conv_model
+from . import simple_model
+from . import simple2_model
