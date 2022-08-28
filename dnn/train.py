@@ -236,7 +236,7 @@ class Trainer:
             return False
 
         new_batch_size = self.config.batch_size + 1024
-        if len(self.replay_buffer) >= new_batch_size and new_batch_size < 1024*10:
+        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*10:
             self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
             self.config.batch_size = new_batch_size
             
@@ -338,12 +338,12 @@ class Trainer:
         if training_started:
             self.logger.info(f'{total_step:6d}: epoch: {epoch:4d}, episode: len: {self.episode_timestep[-1]:2d}, '
                              f'reward: {self.episode_reward[-1]:6.3f}, '
-                             f'e10: {mean_10_reward:6.3f}\u00B1{std_10_reward:5.3f}, '
                              f'e100: {mean_100_reward:6.3f}\u00B1{std_100_reward:5.3f}, '
+                             f'e10: {mean_10_reward:6.3f}\u00B1{std_10_reward:5.3f}, '
                              f'eval_score: '
                              f'e100: {mean_100_eval_score:6.3f}\u00B1{std_100_eval_score:5.3f}, '
                              f'e10: {mean_10_eval_score:6.3f}\u00B1{std_10_eval_score:5.3f}, '
-                             f'wins100: {wins_100:2d}%, '
+                             f'wins100: {wins_100:2d}, '
                              f'max_eval_metric: {self.max_eval_metric:2d}, '
                              f'last10_exploration: {mean_10_exp_rat:.3f}\u00B1{std_10_exp_rat:.3f}'
                              )
