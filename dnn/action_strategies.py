@@ -119,9 +119,9 @@ class SoftMaxStrategy():
         temp = self._update_temp()
 
         with torch.no_grad():
-            q_values = model(state).cpu().detach().data.numpy().squeeze()
+            q_values = model(state).cpu().detach().data.numpy()
             scaled_qs = q_values/temp
-            norm_qs = scaled_qs - scaled_qs.max()            
+            norm_qs = scaled_qs - scaled_qs.max(1)
             e = np.exp(norm_qs)
             probs = e / np.sum(e)
             assert np.isclose(probs.sum(), 1.0)
