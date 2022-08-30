@@ -169,9 +169,9 @@ class Trainer:
         self.eval_agent = 'negamax'
 
         self.train_agent_name = 'selfplay_agent'
-        self.try_load(self.train_agent_name, self.train_agent)
+        model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024*16
+        train_num_games = 1024
         self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
 
         make_args_fn = lambda: {}
@@ -183,7 +183,7 @@ class Trainer:
             pair = [None, self.eval_agent]
             return gym_env.ConnectXGym(self.config, pair)
         
-        eval_num_workers = 25
+        eval_num_workers = 50
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
 
         self.num_evaluations_per_epoch = 100
@@ -198,9 +198,12 @@ class Trainer:
         self.episode_timestep = defaultdict(list)
         self.episode_exploration = defaultdict(list)
         self.evaluation_scores = []
-        
-        self.max_eval_metric, _ = self.evaluate()
-        
+
+        self.max_eval_metric = 0.0
+        if model_loaded:
+            self.max_eval_metric, _ = self.evaluate()
+            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}')
+
     def evaluate(self):
         self.train_agent.set_training_mode(False)
         evaluation_rewards = []
@@ -302,7 +305,7 @@ class Trainer:
         states = states.to(self.config.device)
         actions0 = self.train_action_strategy.select_action(self.train_agent, states)
         actions0 = torch.from_numpy(actions0)
-        new_states, rewards, dones = self.train_env.step(torch.FloatTensor([1]), actions0)
+        new_states, rewards, dones = self.train_env.step(1, actions0)
         self.add_experiences(1, states, actions0, rewards, new_states, dones)
 
         reset_ids = self.select_games(0, rewards, dones)
@@ -315,7 +318,7 @@ class Trainer:
         actions1 = self.train_action_strategy.select_action(self.train_agent, opposite_states1)
 
         actions1 = torch.from_numpy(actions1)
-        new_states1, rewards1, dones1 = self.train_env.step(torch.FloatTensor([2]), actions1)
+        new_states1, rewards1, dones1 = self.train_env.step(2, actions1)
         self.add_experiences(2, states1, actions1, rewards1, new_states1, dones1)
         
         reset_ids = self.select_games(1, rewards1, dones1)
@@ -332,7 +335,7 @@ class Trainer:
             self.episode_timestep[player_id] += [0] * batch_size
             self.episode_exploration[player_id] += [0.0] * batch_size
 
-        for _ in range(10):
+        for _ in range(100):
             self.train_agent.set_training_mode(False)
 
             self.make_step()
@@ -371,8 +374,8 @@ class Trainer:
                              f'eval_score: '
                              f'e100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'wins100: {wins100:2d}, '
-                             f'eval_metric: {eval_metric:2.0f}, '
-                             f'eval_time: total: {eval_time:.1f}, per_epoch: {eval_time_per_epoch:.1f}, '
+                             f'eval_metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
+                             f'eval_time: total: {eval_time:.1f}, '
                              f'expl10: {mean_10_exp_rat0:.3f}\u00B1{std_10_exp_rat0:.3f} / {mean_10_exp_rat1:.3f}\u00B1{std_10_exp_rat1:.3f}'
                              )
 
@@ -401,11 +404,8 @@ class Trainer:
                 continue
 
             metric = metric.split('_')
-            if len(metric) != 2:
-                continue
-
             try:
-                metric = float(metric[1])
+                metric = float(metric[-1])
             except:
                 continue
 
@@ -417,6 +417,9 @@ class Trainer:
             self.logger.info(f'{name}: loading checkpoint {checkpoint_path}, metric: {max_metric}')
             model.load(checkpoint_path)
             self.max_eval_metric = max_metric
+            return True
+
+        return False
         
     def stop(self):
         self.train_env.close()
