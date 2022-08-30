@@ -6,17 +6,18 @@ import numpy as np
 import kaggle_environments as kaggle
 
 class ConnectXGym(gym.Env):
-    def __init__(self, config, other_agent):
+    def __init__(self, config, pair):
         self.config = config
         
         self.env = kaggle.make('connectx', configuration=config, debug=True)
 
-        self.pair = [other_agent, None]
+        self.pair = pair
 
         self.action_shape = (self.config.columns,)
         self.action_space = gym.spaces.Discrete(self.config.columns)
         self.observation_dtype = np.float32
-        self.observation_space = gym.spaces.Box(low=0, high=2, shape=(self.config.rows, self.config.columns, 1), dtype=self.observation_dtype)
+        self.observation_shape = (1, self.config.rows, self.config.columns)
+        self.observation_space = gym.spaces.Box(low=0, high=1, shape=self.observation_shape, dtype=self.observation_dtype)
 
         self.reward_range = (-10, 1)
 
@@ -34,15 +35,28 @@ class ConnectXGym(gym.Env):
         self.state = self.create_state(obs)
         return self.state
 
+    def create_state1(self, obs):
+        mark = obs['mark']
+
+        orig_state = np.asarray(obs['board']).reshape(self.config.rows, self.config.columns)
+        
+        state = np.zeros(self.observation_shape, self.observation_dtype)
+        state[0, orig_state == mark] = 1
+        
+        if mark == 2:
+            state[1, orig_state == 1] = 1
+        else:
+            state[1, orig_state == 2] = 1
+
+        return state
+
     def create_state(self, obs):
-        state = np.asarray(obs['board'])
-        state = state.reshape(self.config.rows, self.config.columns)
+        orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
+        state = orig_state.copy()
+        if obs['mark'] == 2:
+            state[orig_state == 2] = 1
+            state[orig_state == 1] = 2
 
-        # add channels
-        state = np.expand_dims(state, 0)
-
-        # make sure it is np.float32
-        state = state.astype(np.float32)
         return state
     
     def change_reward(self, old_reward, done):
@@ -58,7 +72,6 @@ class ConnectXGym(gym.Env):
         int_action = int(action)
 
         is_valid = self.state[:, 0, int_action] == 0
-        #print(f'action: {action}, is_valid: {is_valid}')
 
         if np.all(is_valid):
             obs, old_reward, done, _ = self.session.step(int_action)
