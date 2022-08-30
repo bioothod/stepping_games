@@ -124,7 +124,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_cnn',
+            'checkpoints_dir': 'checkpoints_cnn1_1',
             'device': torch.device(device),
             
             'rows': 6,
@@ -151,6 +151,7 @@ class Trainer:
         self.logger = logger.setup_logger('ddqn', self.config.logfile, log_to_stdout=self.config.log_to_stdout)
 
         self.max_eval_metric = 0.0
+        self.num_evaluations_per_epoch = 100
 
         def feature_model_creation_func(config):
             #model = networks.simple_model.Model(config)
@@ -163,7 +164,7 @@ class Trainer:
             model = ddqn.DDQN(config)
             return model
 
-        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.01, decay_steps=30000)
+        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.01, decay_steps=60000)
         self.eval_action_strategy = action_strategies.GreedyStrategy()
 
         self.agent1 = ModelWrapper('ddqn', self.config, feature_model_creation_func, action_model_creation_func, self.logger)
@@ -177,11 +178,13 @@ class Trainer:
             np.random.seed(seed)
             random.seed(seed)
 
-            return gym_env.ConnectXGym(self.config, self.agent2)
-        
-        train_num_workers = 32
-        eval_num_workers = 8
+            pair = [None, self.agent2]
+            return gym_env.ConnectXGym(self.config, pair)
+
+        train_num_workers = 64
         self.train_env = MultiprocessEnv('train', make_env_fn, make_args_fn, self.config, self.train_seed, train_num_workers)
+        
+        eval_num_workers = 50
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
         #self.env = gym_env.ConnectXGym(self.config, self.agent2)
         #self.env = gym.make('CartPole-v1')
@@ -190,7 +193,7 @@ class Trainer:
         self.replay_buffer = replay_buffer.ReplayBuffer(obs_shape=state.shape,
                                                         obs_dtype=state.dtype,
                                                         action_shape=(self.config.num_actions, ),
-                                                        capacity=100000,
+                                                        capacity=200000,
                                                         device=device)
 
         self.episode_reward = []
@@ -198,15 +201,18 @@ class Trainer:
         self.evaluation_scores = []
         self.episode_exploration = []
 
-    def evaluate(self, num_episodes=1):
+        self.max_eval_metric, _ = self.evaluate()
+
+    def evaluate(self):
         self.agent1.set_training_mode(False)
         evaluation_rewards = []
-        for _ in range(num_episodes):
+        
+        while len(evaluation_rewards) < self.num_evaluations_per_epoch:
             states = self.eval_env.reset()
             worker_ids = self.eval_env.worker_ids
 
             batch_size = len(states)
-            evaluation_rewards += [0.0] * batch_size
+            episode_rewards = [0.0] * batch_size
 
             while True:
                 actions1 = self.eval_action_strategy.select_action(self.agent1, states)
@@ -216,12 +222,12 @@ class Trainer:
 
                 ready_states = []
                 ret_worker_ids = []
-                for enum_idx, (worker_id, new_state, reward, done) in enumerate(zip(worker_ids, new_states, rewards, dones)):
+                for worker_id, new_state, reward, done in zip(worker_ids, new_states, rewards, dones):
                     if not done:
                         ready_states.append(new_state)
                         ret_worker_ids.append(worker_id)
                         
-                    evaluation_rewards[-1 - worker_id] += reward
+                    episode_rewards[worker_id] += reward
 
                 if len(ready_states) == 0:
                     break
@@ -229,14 +235,19 @@ class Trainer:
                 states = np.array(ready_states, dtype=np.float32)
                 worker_ids = ret_worker_ids
 
-        return evaluation_rewards
+            evaluation_rewards += episode_rewards
+
+        last = evaluation_rewards[-self.num_evaluations_per_epoch:]
+        wins = np.count_nonzero(np.array(last) >= 1) / len(last) * 100
+        
+        return wins, evaluation_rewards
 
     def try_train(self):
         if len(self.replay_buffer) < self.config.batch_size * self.config.num_warmup_batches:
             return False
 
         new_batch_size = self.config.batch_size + 1024
-        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*10:
+        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*16:
             self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
             self.config.batch_size = new_batch_size
             
@@ -252,21 +263,6 @@ class Trainer:
         action_flipped = self.config.num_actions - action - 1
         new_state_flipped = np.flip(new_state, 2)
         self.replay_buffer.add(state_flipped, action_flipped, reward, new_state_flipped, done)
-
-    def add_opposite_state(self, state, action, reward, new_state, done):
-        def make_opposite(state):
-            state_opposite = state.copy()
-            state_opposite[state == 1] = 2
-            state_opposite[state == 2] = 1
-            return state_opposite
-
-        state_opposite = make_opposite(state)
-        new_state_opposite = make_opposite(new_state)
-        if reward == -1:
-            reward = 1
-        elif reward == 1:
-            reward = -1
-        self.replay_buffer.add(state_opposite, action_opposite, reward, new_state_opposite, done)
 
     def run_epoch(self, epoch):
         training_started = False
@@ -314,51 +310,49 @@ class Trainer:
             if len(ret_states) == 0:
                 break
 
-        eval_rewards = self.evaluate()
-        self.evaluation_scores += eval_rewards
-
-        total_step = int(np.sum(self.episode_timestep))
-        mean_10_reward = np.mean(self.episode_reward[-10:])
-        std_10_reward = np.std(self.episode_reward[-10:])
-        mean_100_reward = np.mean(self.episode_reward[-100:])
-        std_100_reward = np.std(self.episode_reward[-100:])
-        
-        mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
-        std_100_eval_score = np.std(self.evaluation_scores[-100:])
-        mean_10_eval_score = np.mean(self.evaluation_scores[-10:])
-        std_10_eval_score = np.std(self.evaluation_scores[-10:])
-
-        lst_10_exp_rat = np.array(self.episode_exploration[-10:])/np.array(self.episode_timestep[-10:])
-        mean_10_exp_rat = np.mean(lst_10_exp_rat)
-        std_10_exp_rat = np.std(lst_10_exp_rat)
-
-        wins_100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
-        eval_metric = wins_100
-
         if training_started:
+            eval_metric, eval_rewards = self.evaluate()
+            self.evaluation_scores += eval_rewards
+
+            total_step = int(np.sum(self.episode_timestep))
+            mean_10_reward = np.mean(self.episode_reward[-10:])
+            std_10_reward = np.std(self.episode_reward[-10:])
+            mean_100_reward = np.mean(self.episode_reward[-100:])
+            std_100_reward = np.std(self.episode_reward[-100:])
+
+            mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
+            std_100_eval_score = np.std(self.evaluation_scores[-100:])
+            mean_10_eval_score = np.mean(self.evaluation_scores[-10:])
+            std_10_eval_score = np.std(self.evaluation_scores[-10:])
+
+            lst_10_exp_rat = np.array(self.episode_exploration[-10:])/np.array(self.episode_timestep[-10:])
+            mean_10_exp_rat = np.mean(lst_10_exp_rat)
+            std_10_exp_rat = np.std(lst_10_exp_rat)
+
+            wins_100 = np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100
+
             self.logger.info(f'{total_step:6d}: epoch: {epoch:4d}, episode: len: {self.episode_timestep[-1]:2d}, '
                              f'reward: {self.episode_reward[-1]:6.3f}, '
                              f'e100: {mean_100_reward:6.3f}\u00B1{std_100_reward:5.3f}, '
-                             f'e10: {mean_10_reward:6.3f}\u00B1{std_10_reward:5.3f}, '
                              f'eval_score: '
                              f'e100: {mean_100_eval_score:6.3f}\u00B1{std_100_eval_score:5.3f}, '
-                             f'e10: {mean_10_eval_score:6.3f}\u00B1{std_10_eval_score:5.3f}, '
-                             f'wins100: {wins_100:2d}, '
-                             f'max_eval_metric: {self.max_eval_metric:2d}, '
-                             f'last10_exploration: {mean_10_exp_rat:.3f}\u00B1{std_10_exp_rat:.3f}'
+                             f'wins100: {wins_100:2.0f}, '
+                             f'eval_metric: {eval_metric:2.0f}/{self.max_eval_metric:2.0f}, '
+                             f'expl10: {mean_10_exp_rat:.3f}\u00B1{std_10_exp_rat:.3f}'
                              )
 
-        if eval_metric >= self.max_eval_metric:
-            self.max_eval_metric = eval_metric
+            if eval_metric > self.max_eval_metric and len(self.evaluation_scores[-100:]) == 100:
+                self.max_eval_metric = eval_metric
 
-            checkpoint_path = os.path.join(self.config.checkpoints_dir, f'agent1_{eval_metric}.ckpt')
-            self.agent1.save(checkpoint_path)
-            self.logger.info(f'eval_metric: {eval_metric:2d}, saved agent1 -> {checkpoint_path}')
+                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'agent1_{int(eval_metric)}.ckpt')
+                self.agent1.save(checkpoint_path)
+                self.logger.info(f'eval_metric: {eval_metric:2.0f}, saved agent1 -> {checkpoint_path}')
 
     def try_load(self, name, model):
+        loaded = False
         max_metric = None
         checkpoint_path = None
-        
+
         for checkpoint_fn in os.listdir(self.config.checkpoints_dir):
             if checkpoint_fn == f'{name}.ckpt':
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, checkpoint_fn)
@@ -385,10 +379,13 @@ class Trainer:
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, checkpoint_fn)
                 max_metric = metric
 
-        if checkpoint_path is not None:
+        if checkpoint_path is not None and max_metric is not None:
             self.logger.info(f'{name}: loading checkpoint {checkpoint_path}, metric: {max_metric}')
             model.load(checkpoint_path)
             self.max_eval_metric = max_metric
+            loaded = True
+
+        return loaded
         
     def stop(self):
         self.train_env.close()
