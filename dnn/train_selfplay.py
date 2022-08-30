@@ -4,6 +4,7 @@ import random
 
 from collections import defaultdict
 from easydict import EasyDict as edict
+from kaggle_environments import perf_counter
 
 import numpy as np
 import torch
@@ -170,7 +171,7 @@ class Trainer:
         self.train_agent_name = 'selfplay_agent'
         self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024
+        train_num_games = 1024*16
         self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
 
         make_args_fn = lambda: {}
@@ -182,7 +183,7 @@ class Trainer:
             pair = [None, self.eval_agent]
             return gym_env.ConnectXGym(self.config, pair)
         
-        eval_num_workers = 50
+        eval_num_workers = 25
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
 
         self.num_evaluations_per_epoch = 100
@@ -283,52 +284,47 @@ class Trainer:
             self.replay_buffer.add(state, action, reward, new_state, float(done))
             self.add_flipped_state(state, action, reward, new_state, done)
 
-    def select_games(self, player_id, game_ids, states, rewards, dones):
-        ret_game_ids = []
-        ret_states = []
-        for enum_idx, (game_id, state, reward, done) in enumerate(zip(game_ids, states, rewards, dones)):
-            if not done:
-                ret_game_ids.append(game_id)
-                ret_states.append(state)
+    def select_games(self, player_id, rewards, dones):
+        reset_ids = []
+        for game_id, (reward, done) in enumerate(zip(rewards, dones)):
+            if done:
+                reset_ids.append(game_id)
 
             idx = -1 - game_id
             self.episode_reward[player_id][idx] += reward
             self.episode_timestep[player_id][idx] += 1
-            self.episode_exploration[player_id][idx] += int(self.train_action_strategy.exploratory_action_taken[enum_idx])
+            self.episode_exploration[player_id][idx] += int(self.train_action_strategy.exploratory_action_taken[game_id])
 
-        if len(ret_states) == 0:
-            return [], []
-
-        ret_states = torch.stack(ret_states)
-        return ret_game_ids, ret_states
+        return reset_ids
     
-    def make_step(self, states, game_ids):
+    def make_step(self):
+        states = self.train_env.current_games()
         states = states.to(self.config.device)
         actions0 = self.train_action_strategy.select_action(self.train_agent, states)
-        new_states, rewards, dones = self.train_env.step(1, game_ids, actions0)
+        actions0 = torch.from_numpy(actions0)
+        new_states, rewards, dones = self.train_env.step(torch.FloatTensor([1]), actions0)
         self.add_experiences(1, states, actions0, rewards, new_states, dones)
 
-        game_ids, states1 = self.select_games(0, game_ids, new_states, rewards, dones)
-        if len(game_ids) == 0:
-            return [], []
-
+        reset_ids = self.select_games(0, rewards, dones)
+        self.train_env.reset_games(reset_ids)
+        
+        states1 = self.train_env.current_games()
         opposite_states1 = self.make_opposite(states1)
         opposite_states1 = opposite_states1.to(self.config.device)
         # agent's network assumes inputs are always related to player0
         actions1 = self.train_action_strategy.select_action(self.train_agent, opposite_states1)
-        
-        new_states1, rewards1, dones1 = self.train_env.step(2, game_ids, actions1)
+
+        actions1 = torch.from_numpy(actions1)
+        new_states1, rewards1, dones1 = self.train_env.step(torch.FloatTensor([2]), actions1)
         self.add_experiences(2, states1, actions1, rewards1, new_states1, dones1)
         
-        ret_game_ids, ret_states = self.select_games(1, game_ids, new_states1, rewards1, dones1)
-        return ret_states, ret_game_ids
+        reset_ids = self.select_games(1, rewards1, dones1)
+        self.train_env.reset_games(reset_ids)
         
     def run_epoch(self, epoch):
         training_started = False
         
         states = self.train_env.reset()
-        game_ids = list(range(len(states)))
-
         batch_size = len(states)
 
         for player_id in range(2):
@@ -336,16 +332,16 @@ class Trainer:
             self.episode_timestep[player_id] += [0] * batch_size
             self.episode_exploration[player_id] += [0.0] * batch_size
 
-        while True:
+        for _ in range(10):
             self.train_agent.set_training_mode(False)
 
-            states, game_ids = self.make_step(states, game_ids)
+            self.make_step()
             training_started = self.try_train()
 
-            if len(states) == 0:
-                break
-
+        eval_start_time = perf_counter()
         eval_metric, eval_rewards = self.evaluate()
+        eval_time = perf_counter() - eval_start_time
+        
         self.evaluation_scores += eval_rewards
 
         total_step = int(np.sum(self.episode_timestep[0]))
@@ -375,7 +371,8 @@ class Trainer:
                              f'eval_score: '
                              f'e100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'wins100: {wins100:2d}, '
-                             f'eval_metric: {eval_metric:2.0f}/{self.max_eval_metric:2.0f}, '
+                             f'eval_metric: {eval_metric:2.0f}, '
+                             f'eval_time: total: {eval_time:.1f}, per_epoch: {eval_time_per_epoch:.1f}, '
                              f'expl10: {mean_10_exp_rat0:.3f}\u00B1{std_10_exp_rat0:.3f} / {mean_10_exp_rat1:.3f}\u00B1{std_10_exp_rat1:.3f}'
                              )
 
