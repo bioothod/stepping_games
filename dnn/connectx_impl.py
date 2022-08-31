@@ -86,7 +86,7 @@ class ConnectX:
             job = joblib.delayed(step_single_game)(game, player, action, self.num_rows, self.num_columns, self.inarow)
             jobs.append(job)
 
-        with joblib.parallel_backend('threading', n_jobs=8):
+        with joblib.parallel_backend('threading', n_jobs=16):
             results = joblib.Parallel(require='sharedmem')(jobs)
 
             rewards = np.zeros(len(actions), dtype=np.float32)

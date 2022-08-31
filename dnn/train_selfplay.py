@@ -171,7 +171,7 @@ class Trainer:
         self.train_agent_name = 'selfplay_agent'
         model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024
+        train_num_games = 1024*2
         self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
 
         make_args_fn = lambda: {}
