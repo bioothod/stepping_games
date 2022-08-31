@@ -201,8 +201,11 @@ class Trainer:
 
         self.max_eval_metric = 0.0
         if model_loaded:
+            eval_time_start = perf_counter()
             self.max_eval_metric, _ = self.evaluate()
-            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}')
+            eval_time = perf_counter() - eval_time_start
+
+            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
 
     def evaluate(self):
         self.train_agent.set_training_mode(False)
@@ -341,9 +344,7 @@ class Trainer:
             self.make_step()
             training_started = self.try_train()
 
-        eval_start_time = perf_counter()
         eval_metric, eval_rewards = self.evaluate()
-        eval_time = perf_counter() - eval_start_time
         
         self.evaluation_scores += eval_rewards
 
@@ -375,7 +376,6 @@ class Trainer:
                              f'e100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'wins100: {wins100:2d}, '
                              f'eval_metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
-                             f'eval_time: total: {eval_time:.1f}, '
                              f'expl10: {mean_10_exp_rat0:.3f}\u00B1{std_10_exp_rat0:.3f} / {mean_10_exp_rat1:.3f}\u00B1{std_10_exp_rat1:.3f}'
                              )
 
