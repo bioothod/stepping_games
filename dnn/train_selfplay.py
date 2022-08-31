@@ -162,7 +162,7 @@ class Trainer:
             model = ddqn.DDQN(config)
             return model
 
-        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.01, decay_steps=30000)
+        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=1_000_000)
         self.eval_action_strategy = action_strategies.GreedyStrategy()
 
         self.train_agent = ModelWrapper('ddqn', self.config, feature_model_creation_func, action_model_creation_func, self.logger)
@@ -171,7 +171,7 @@ class Trainer:
         self.train_agent_name = 'selfplay_agent'
         model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024*2
+        train_num_games = 1024
         self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
 
         make_args_fn = lambda: {}
@@ -191,7 +191,7 @@ class Trainer:
         self.replay_buffer = replay_buffer.ReplayBuffer(obs_shape=self.train_env.observation_shape,
                                                         obs_dtype=np.float32,
                                                         action_shape=(self.config.num_actions, ),
-                                                        capacity=100000,
+                                                        capacity=100_000_000,
                                                         device=device)
 
         self.episode_reward = defaultdict(list)
@@ -329,8 +329,8 @@ class Trainer:
         
     def run_epoch(self, epoch):
         training_started = False
-        
-        states = self.train_env.reset()
+
+        states = self.train_env.current_games()
         batch_size = len(states)
 
         for player_id in range(2):
