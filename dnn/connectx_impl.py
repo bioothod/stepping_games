@@ -113,7 +113,7 @@ class ConnectX:
         for gs in self.completed_games[-num_games:]:
             for player_id, player_stats in gs.player_stats.items():
                 rewards[player_id].append(player_stats.reward)
-                expl[player_id].append(player_stats.exploration_steps)
+                expl[player_id].append(player_stats.exploration_steps / player_stats.timesteps)
                 time_steps[player_id] += player_stats.timesteps
 
         mean_rewards = {player_id:np.mean(rew) for player_id, rew in rewards.items()}
@@ -126,17 +126,21 @@ class ConnectX:
     def last_game_stats(self):
         return self.completed_games[-1]
     
-    def update_game_stats(self, player_id, rewards, dones, explorations):
-        for game_id, (reward, done, exploration) in enumerate(zip(rewards, dones, explorations)):
+    def update_game_rewards(self, player_id, rewards, explorations):
+        for game_id, (reward, exploration) in enumerate(zip(rewards, explorations)):
             gs = self.current_games[game_id]
             gs.update(player_id, reward, exploration)
 
-            if done:
-                self.games[game_id, ...] = 0
+    def update_game_done_statuses(self, dones):
+        for game_id, player_done_statuses in enumerate(zip(*dones.values())):
+            for done in player_done_statuses:
+                if done:
+                    gs = self.current_games[game_id]
+                    self.games[game_id, ...] = 0
 
-                self.completed_games.append(gs)
-
-                self.current_games[game_id] = self.create_new_game()
+                    self.completed_games.append(gs)
+                    self.current_games[game_id] = self.create_new_game()
+                    break
 
     def step(self, player, actions):
         player = torch.FloatTensor([player])[0]

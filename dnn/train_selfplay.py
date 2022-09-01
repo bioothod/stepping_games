@@ -162,7 +162,7 @@ class Trainer:
             model = ddqn.DDQN(config)
             return model
 
-        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=1_000_000)
+        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=100_000_000)
         self.eval_action_strategy = action_strategies.GreedyStrategy()
 
         self.train_agent = ModelWrapper('ddqn', self.config, feature_model_creation_func, action_model_creation_func, self.logger)
@@ -308,8 +308,12 @@ class Trainer:
         new_states2, rewards2, dones2 = self.train_env.step(2, actions2)
         self.add_experiences(2, states2, actions2, rewards2, new_states2, dones2)
 
-        self.train_env.update_game_stats(1, rewards1, dones1, explorations1)
-        self.train_env.update_game_stats(2, rewards2, dones2, explorations2)
+        self.train_env.update_game_rewards(1, rewards1, explorations1)
+        self.train_env.update_game_rewards(2, rewards2, explorations2)
+        self.train_env.update_game_done_statuses({
+            1: dones1,
+            2: dones2,
+        })
         
     def run_epoch(self, epoch):
         training_started = False
@@ -336,17 +340,14 @@ class Trainer:
             wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
 
             self.logger.info(f'{self.train_env.total_steps:6d}: '
-                             f'epoch: {epoch:4d}, '
                              f'completed_games: {len(self.train_env.completed_games):5d}, '
-                             f'replay_buffer: {len(self.replay_buffer):5d}, '
-                             f'last_game: ts: {last_game_stat.player_stats[1].timesteps:2d}, '
+                             f'replay_buffer%: {self.replay_buffer.filled()*100:2.0f}, '
+                             f'last: ts: {last_game_stat.player_stats[1].timesteps:2d}, '
                              f'reward: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
-                             f'reward_l100: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:4.2f}\u00B1{std_rewards[2]:4.2f}, '
-                             f'eval_score: '
-                             f'l100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
-                             f'wins100: {wins100:2d}, '
+                             f'r100: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:4.2f}\u00B1{std_rewards[2]:4.2f}, '
+                             f'eval_100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'eval_metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
-                             f'expl100: {mean_expl[1]:.3f}\u00B1{std_expl[1]:.2f} / {mean_expl[2]:.3f}\u00B1{std_expl[2]:.2f}'
+                             f'expl100: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}'
                              )
 
             if eval_metric > self.max_eval_metric:
