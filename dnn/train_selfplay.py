@@ -125,7 +125,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_cnn_selfplay_1',
+            'checkpoints_dir': 'checkpoints_simple2_selfplay_1',
             'device': torch.device(device),
             
             'rows': 6,
@@ -135,14 +135,17 @@ class Trainer:
             'init_lr': 1e-4,
             'min_lr': 1e-5,
 
-            'gamma': 1,
-            'tau': 0.1,
+            'gamma': 0.99,
+            'tau': 0.3,
 
             'num_features': 512,
             'num_actions': 7,
 
             'num_warmup_batches': 1,
             'batch_size': 1024,
+            'max_batch_size': 1024*32,
+
+            'train_num_games': 1024,
         })
         
         os.makedirs(self.config.checkpoints_dir, exist_ok=True)
@@ -151,10 +154,17 @@ class Trainer:
         self.config.log_to_stdout = True
         self.logger = logger.setup_logger('ddqn', self.config.logfile, log_to_stdout=self.config.log_to_stdout)
 
+        config_message = []
+        for k, v in self.config.items():
+            config_message.append(f'{k:>32s}:{str(v):>16s}')
+        config_message = '\n'.join(config_message)
+
+        self.logger.info(f'config:\n{config_message}')
+
         def feature_model_creation_func(config):
             #model = networks.simple_model.Model(config)
-            #model = networks.simple2_model.Model(config)
-            model = networks.conv_model.Model(config)
+            model = networks.simple2_model.Model(config)
+            #model = networks.conv_model.Model(config)
             #model = networks.empty_model.Model(config)
             return model
 
@@ -171,8 +181,7 @@ class Trainer:
         self.train_agent_name = 'selfplay_agent'
         model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024*2
-        self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
+        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games)
 
         make_args_fn = lambda: {}
         def make_env_fn(seed=None):
@@ -249,7 +258,7 @@ class Trainer:
             return False
 
         new_batch_size = self.config.batch_size + 1024
-        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*64:
+        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= self.config.max_batch_size:
             self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
             self.config.batch_size = new_batch_size
             
@@ -272,49 +281,33 @@ class Trainer:
         state_opposite[state == 2] = 1
         return state_opposite
 
-    def add_experiences(self, player_id, states, actions, rewards, new_states, dones):
-        if player_id == 2:
-            states = self.make_opposite(states)
-            new_states = self.make_opposite(new_states)
-        
+    def add_experiences(self, states, actions, rewards, new_states, dones):
         states = states.detach().cpu().numpy()
         new_states = new_states.detach().cpu().numpy()
         
         for state, action, reward, new_state, done in zip(states, actions, rewards, new_states, dones):
-            if player_id == 2:
-                if reward == -1:
-                    reward = 1
-                elif reward == 1:
-                    reward = -1
-
-            self.replay_buffer.add(state, action, reward, new_state, float(done))
+            self.replay_buffer.add(state, action, reward, new_state, done)
             self.add_flipped_state(state, action, reward, new_state, done)
 
     def make_step(self):
-        states1 = self.train_env.current_states()
-        states1 = states1.to(self.config.device)
+        states1 = self.train_env.current_states().to(self.config.device)
         actions1, explorations1 = self.train_action_strategy.select_action(self.train_agent, states1)
         actions1 = torch.from_numpy(actions1)
         new_states1, rewards1, dones1 = self.train_env.step(1, actions1)
-        self.add_experiences(1, states1, actions1, rewards1, new_states1, dones1)
+        self.add_experiences(states1, actions1, rewards1, new_states1, dones1)
+        self.train_env.update_game_rewards(1, rewards1, dones1, explorations1)
 
         states2 = self.train_env.current_states()
-        opposite_states2 = self.make_opposite(states2)
-        opposite_states2 = opposite_states2.to(self.config.device)
+        opposite_states2 = self.make_opposite(states2).to(self.config.device)
         # agent's network assumes inputs are always related to player0
         actions2, explorations2 = self.train_action_strategy.select_action(self.train_agent, opposite_states2)
 
         actions2 = torch.from_numpy(actions2)
         new_states2, rewards2, dones2 = self.train_env.step(2, actions2)
-        self.add_experiences(2, states2, actions2, rewards2, new_states2, dones2)
+        new_opposite_states2 = self.make_opposite(new_states2)
+        self.add_experiences(opposite_states2, actions2, rewards2, new_opposite_states2, dones2)
+        self.train_env.update_game_rewards(2, rewards2, dones2, explorations2)
 
-        self.train_env.update_game_rewards(1, rewards1, explorations1)
-        self.train_env.update_game_rewards(2, rewards2, explorations2)
-        self.train_env.update_game_done_statuses({
-            1: dones1,
-            2: dones2,
-        })
-        
     def run_epoch(self, epoch):
         training_started = False
 
@@ -325,7 +318,7 @@ class Trainer:
             training_started = self.try_train()
 
         if training_started:
-            mean_rewards, std_rewards, mean_expl, std_expl = self.train_env.completed_games_stats(100)
+            mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps = self.train_env.completed_games_stats(100)
             if len(mean_rewards) == 0:
                 return
 
@@ -340,14 +333,18 @@ class Trainer:
             wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
 
             self.logger.info(f'{self.train_env.total_steps:6d}: '
-                             f'completed_games: {len(self.train_env.completed_games):5d}, '
-                             f'replay_buffer%: {self.replay_buffer.filled()*100:2.0f}, '
-                             f'last: ts: {last_game_stat.player_stats[1].timesteps:2d}, '
-                             f'reward: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
-                             f'r100: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:4.2f}\u00B1{std_rewards[2]:4.2f}, '
-                             f'eval_100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
-                             f'eval_metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
-                             f'expl100: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}'
+                             f'games: {len(self.train_env.completed_games):5d}, '
+                             f'buffer%: {self.replay_buffer.filled()*100:2.0f}, '
+                             f'last: '
+                             f'ts: {last_game_stat.player_stats[1].timesteps:2d}, '
+                             f'r: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
+                             f'last100: '
+                             f'ts: {mean_timesteps[1]:5.2f}\u00B1{std_timesteps[1]:4.2f} / {mean_timesteps[2]:5.2f}\u00B1{std_timesteps[2]:4.2f}, '
+                             f'r: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:5.2f}\u00B1{std_rewards[2]:4.2f}, '
+                             f'expl: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}, '
+                             f'eval: '
+                             f'r100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
+                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 
             if eval_metric > self.max_eval_metric:

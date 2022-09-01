@@ -1,6 +1,6 @@
 import joblib
 
-from collections import defaultdict, OrderedDict
+from collections import defaultdict
 from easydict import EasyDict
 
 import numpy as np
@@ -108,39 +108,36 @@ class ConnectX:
     def completed_games_stats(self, num_games):
         rewards = defaultdict(list)
         expl = defaultdict(list)
-        time_steps = defaultdict(int)
+        time_steps = defaultdict(list)
 
         for gs in self.completed_games[-num_games:]:
             for player_id, player_stats in gs.player_stats.items():
                 rewards[player_id].append(player_stats.reward)
                 expl[player_id].append(player_stats.exploration_steps / player_stats.timesteps)
-                time_steps[player_id] += player_stats.timesteps
+                time_steps[player_id].append(player_stats.timesteps)
 
         mean_rewards = {player_id:np.mean(rew) for player_id, rew in rewards.items()}
         std_rewards = {player_id:np.std(rew) for player_id, rew in rewards.items()}
         mean_expl = {player_id:np.mean(ex) for player_id, ex in expl.items()}
         std_expl = {player_id:np.std(ex) for player_id, ex in expl.items()}
+        mean_timesteps = {player_id:np.mean(ts) for player_id, ts in time_steps.items()}
+        std_timesteps = {player_id:np.std(ts) for player_id, ts in time_steps.items()}
 
-        return mean_rewards, std_rewards, mean_expl, std_expl
+        return mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps
 
     def last_game_stats(self):
         return self.completed_games[-1]
     
-    def update_game_rewards(self, player_id, rewards, explorations):
-        for game_id, (reward, exploration) in enumerate(zip(rewards, explorations)):
+    def update_game_rewards(self, player_id, rewards, dones, explorations):
+        for game_id, (reward, done, exploration) in enumerate(zip(rewards, dones, explorations)):
             gs = self.current_games[game_id]
             gs.update(player_id, reward, exploration)
 
-    def update_game_done_statuses(self, dones):
-        for game_id, player_done_statuses in enumerate(zip(*dones.values())):
-            for done in player_done_statuses:
-                if done:
-                    gs = self.current_games[game_id]
-                    self.games[game_id, ...] = 0
+            if done:
+                self.games[game_id, ...] = 0
 
-                    self.completed_games.append(gs)
-                    self.current_games[game_id] = self.create_new_game()
-                    break
+                self.completed_games.append(gs)
+                self.current_games[game_id] = self.create_new_game()
 
     def step(self, player, actions):
         player = torch.FloatTensor([player])[0]
