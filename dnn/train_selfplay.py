@@ -125,7 +125,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_cnn_selfplay',
+            'checkpoints_dir': 'checkpoints_cnn_selfplay_1',
             'device': torch.device(device),
             
             'rows': 6,
@@ -135,7 +135,7 @@ class Trainer:
             'init_lr': 1e-4,
             'min_lr': 1e-5,
 
-            'gamma': 0.99,
+            'gamma': 1,
             'tau': 0.1,
 
             'num_features': 512,
@@ -171,7 +171,7 @@ class Trainer:
         self.train_agent_name = 'selfplay_agent'
         model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
-        train_num_games = 1024
+        train_num_games = 1024*2
         self.train_env = connectx_impl.ConnectX(self.config, train_num_games)
 
         make_args_fn = lambda: {}
@@ -182,7 +182,7 @@ class Trainer:
 
             pair = [None, self.eval_agent]
             return gym_env.ConnectXGym(self.config, pair)
-        
+
         eval_num_workers = 50
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
 
@@ -219,7 +219,7 @@ class Trainer:
             episode_rewards = [0.0] * batch_size
 
             while True:
-                actions = self.eval_action_strategy.select_action(self.train_agent, states)
+                actions, _ = self.eval_action_strategy.select_action(self.train_agent, states)
                 new_states, rewards, dones, infos = self.eval_env.step(worker_ids, actions)
 
                 ready_states = []
@@ -249,7 +249,7 @@ class Trainer:
             return False
 
         new_batch_size = self.config.batch_size + 1024
-        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*32:
+        if len(self.replay_buffer) >= new_batch_size and new_batch_size <= 1024*64:
             self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
             self.config.batch_size = new_batch_size
             
@@ -290,53 +290,29 @@ class Trainer:
             self.replay_buffer.add(state, action, reward, new_state, float(done))
             self.add_flipped_state(state, action, reward, new_state, done)
 
-    def select_games(self, player_id, rewards, dones):
-        reset_ids = []
-        for game_id, (reward, done) in enumerate(zip(rewards, dones)):
-            if done:
-                reset_ids.append(game_id)
-
-            idx = -1 - game_id
-            self.episode_reward[player_id][idx] += reward
-            self.episode_timestep[player_id][idx] += 1
-            self.episode_exploration[player_id][idx] += int(self.train_action_strategy.exploratory_action_taken[game_id])
-
-        return reset_ids
-    
     def make_step(self):
-        states = self.train_env.current_games()
-        states = states.to(self.config.device)
-        actions0 = self.train_action_strategy.select_action(self.train_agent, states)
-        actions0 = torch.from_numpy(actions0)
-        new_states, rewards, dones = self.train_env.step(1, actions0)
-        self.add_experiences(1, states, actions0, rewards, new_states, dones)
-
-        reset_ids = self.select_games(0, rewards, dones)
-        self.train_env.reset_games(reset_ids)
-        
-        states1 = self.train_env.current_games()
-        opposite_states1 = self.make_opposite(states1)
-        opposite_states1 = opposite_states1.to(self.config.device)
-        # agent's network assumes inputs are always related to player0
-        actions1 = self.train_action_strategy.select_action(self.train_agent, opposite_states1)
-
+        states1 = self.train_env.current_states()
+        states1 = states1.to(self.config.device)
+        actions1, explorations1 = self.train_action_strategy.select_action(self.train_agent, states1)
         actions1 = torch.from_numpy(actions1)
-        new_states1, rewards1, dones1 = self.train_env.step(2, actions1)
-        self.add_experiences(2, states1, actions1, rewards1, new_states1, dones1)
-        
-        reset_ids = self.select_games(1, rewards1, dones1)
-        self.train_env.reset_games(reset_ids)
+        new_states1, rewards1, dones1 = self.train_env.step(1, actions1)
+        self.add_experiences(1, states1, actions1, rewards1, new_states1, dones1)
+
+        states2 = self.train_env.current_states()
+        opposite_states2 = self.make_opposite(states2)
+        opposite_states2 = opposite_states2.to(self.config.device)
+        # agent's network assumes inputs are always related to player0
+        actions2, explorations2 = self.train_action_strategy.select_action(self.train_agent, opposite_states2)
+
+        actions2 = torch.from_numpy(actions2)
+        new_states2, rewards2, dones2 = self.train_env.step(2, actions2)
+        self.add_experiences(2, states2, actions2, rewards2, new_states2, dones2)
+
+        self.train_env.update_game_stats(1, rewards1, dones1, explorations1)
+        self.train_env.update_game_stats(2, rewards2, dones2, explorations2)
         
     def run_epoch(self, epoch):
         training_started = False
-
-        states = self.train_env.current_games()
-        batch_size = len(states)
-
-        for player_id in range(2):
-            self.episode_reward[player_id] += [0.0] * batch_size
-            self.episode_timestep[player_id] += [0] * batch_size
-            self.episode_exploration[player_id] += [0.0] * batch_size
 
         for _ in range(100):
             self.train_agent.set_training_mode(False)
@@ -344,47 +320,41 @@ class Trainer:
             self.make_step()
             training_started = self.try_train()
 
-        eval_metric, eval_rewards = self.evaluate()
-        
-        self.evaluation_scores += eval_rewards
-
-        total_step = int(np.sum(self.episode_timestep[0]))
-        mean_100_reward0 = np.mean(self.episode_reward[0][-100:])
-        std_100_reward0 = np.std(self.episode_reward[0][-100:])
-        mean_100_reward1 = np.mean(self.episode_reward[1][-100:])
-        std_100_reward1 = np.std(self.episode_reward[1][-100:])
-        
-        mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
-        std_100_eval_score = np.std(self.evaluation_scores[-100:])
-
-        lst_10_exp_rat0 = np.array(self.episode_exploration[0][-10:])/np.array(self.episode_timestep[0][-10:])
-        mean_10_exp_rat0 = np.mean(lst_10_exp_rat0)
-        std_10_exp_rat0 = np.std(lst_10_exp_rat0)
-        lst_10_exp_rat1 = np.array(self.episode_exploration[1][-10:])/np.array(self.episode_timestep[1][-10:])
-        mean_10_exp_rat1 = np.mean(lst_10_exp_rat1)
-        std_10_exp_rat1 = np.std(lst_10_exp_rat1)
-
-        wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
-
         if training_started:
-            self.logger.info(f'{total_step:6d}: '
+            mean_rewards, std_rewards, mean_expl, std_expl = self.train_env.completed_games_stats(100)
+            if len(mean_rewards) == 0:
+                return
+
+            last_game_stat = self.train_env.last_game_stats()
+
+            eval_metric, eval_rewards = self.evaluate()
+            self.evaluation_scores += eval_rewards
+
+            mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
+            std_100_eval_score = np.std(self.evaluation_scores[-100:])
+
+            wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
+
+            self.logger.info(f'{self.train_env.total_steps:6d}: '
                              f'epoch: {epoch:4d}, '
-                             f'episode: len: {self.episode_timestep[0][-1]:2d} / {self.episode_timestep[1][-1]:2d}, '
-                             f'reward: {self.episode_reward[0][-1]:5.2f} / {self.episode_reward[1][-1]:5.2f}, '
-                             f'e100: {mean_100_reward0:5.2f}\u00B1{std_100_reward0:4.2f} / {mean_100_reward1:4.2f}\u00B1{std_100_reward1:4.2f}, '
+                             f'completed_games: {len(self.train_env.completed_games):5d}, '
+                             f'replay_buffer: {len(self.replay_buffer):5d}, '
+                             f'last_game: ts: {last_game_stat.player_stats[1].timesteps:2d}, '
+                             f'reward: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
+                             f'reward_l100: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:4.2f}\u00B1{std_rewards[2]:4.2f}, '
                              f'eval_score: '
-                             f'e100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
+                             f'l100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'wins100: {wins100:2d}, '
                              f'eval_metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
-                             f'expl10: {mean_10_exp_rat0:.3f}\u00B1{std_10_exp_rat0:.3f} / {mean_10_exp_rat1:.3f}\u00B1{std_10_exp_rat1:.3f}'
+                             f'expl100: {mean_expl[1]:.3f}\u00B1{std_expl[1]:.2f} / {mean_expl[2]:.3f}\u00B1{std_expl[2]:.2f}'
                              )
 
-        if eval_metric > self.max_eval_metric:
-            self.max_eval_metric = eval_metric
+            if eval_metric > self.max_eval_metric:
+                self.max_eval_metric = eval_metric
 
-            checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{self.train_agent_name}_{eval_metric:.0f}.ckpt')
-            self.train_agent.save(checkpoint_path)
-            self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {self.train_agent_name} -> {checkpoint_path}')
+                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{self.train_agent_name}_{eval_metric:.0f}.ckpt')
+                self.train_agent.save(checkpoint_path)
+                self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {self.train_agent_name} -> {checkpoint_path}')
 
     def try_load(self, name, model):
         max_metric = None
