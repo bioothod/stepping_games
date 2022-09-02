@@ -1,3 +1,5 @@
+from bloom_filter2 import BloomFilter
+
 import numpy as np
 
 import torch
@@ -13,6 +15,8 @@ class ReplayBuffer:
         self.rewards = np.empty((capacity, 1), dtype=np.float32)
         self.dones = np.empty((capacity, 1), dtype=np.float32)
 
+        self.experience_bloom_filter = BloomFilter(max_elements=100_000_000, error_rate=0.01)
+
         self.idx = 0
         self.full = False
 
@@ -23,6 +27,13 @@ class ReplayBuffer:
         return len(self) / self.capacity
 
     def add(self, obs, action, reward, next_obs, done):
+        flat_obs = obs.reshape(-1)
+        key = np.concatenate([flat_obs, [action]]).astype(np.uint8).tolist()
+        if key in self.experience_bloom_filter:
+            return
+
+        self.experience_bloom_filter.add(key)
+
         np.copyto(self.states[self.idx], obs)
         np.copyto(self.actions[self.idx], action)
         np.copyto(self.rewards[self.idx], reward)
