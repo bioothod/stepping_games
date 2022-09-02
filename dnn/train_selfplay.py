@@ -8,7 +8,6 @@ from easydict import EasyDict as edict
 from time import perf_counter
 
 import numpy as np
-from numpy.core.overrides import set_array_function_like_doc
 import torch
 import torch.nn as nn
 
@@ -129,7 +128,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_conv_selfplay_1',
+            'checkpoints_dir': 'checkpoints_simple3_selfplay_1',
             'device': torch.device(device),
             
             'rows': 6,
@@ -147,7 +146,7 @@ class Trainer:
 
             'num_warmup_batches': 1,
             'batch_size': 1024,
-            'max_batch_size': 1024*32,
+            'max_batch_size': 1024*16,
 
             'train_num_games': 1024,
         })
@@ -168,7 +167,8 @@ class Trainer:
         def feature_model_creation_func(config):
             #model = networks.simple_model.Model(config)
             #model = networks.simple2_model.Model(config)
-            model = networks.conv_model.Model(config)
+            model = networks.simple3_model.Model(config)
+            #model = networks.conv_model.Model(config)
             #model = networks.empty_model.Model(config)
             return model
 
