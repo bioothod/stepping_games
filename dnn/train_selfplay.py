@@ -3,12 +3,16 @@ import os
 import random
 
 from collections import defaultdict
+from copy import deepcopy
 from easydict import EasyDict as edict
-from kaggle_environments import perf_counter
+from time import perf_counter
 
 import numpy as np
+from numpy.core.overrides import set_array_function_like_doc
 import torch
 import torch.nn as nn
+
+torch.backends.cuda.matmul.allow_tf32 = True
 
 import action_strategies
 import connectx_impl
@@ -125,7 +129,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple2_selfplay_1',
+            'checkpoints_dir': 'checkpoints_conv_selfplay_1',
             'device': torch.device(device),
             
             'rows': 6,
@@ -136,7 +140,7 @@ class Trainer:
             'min_lr': 1e-5,
 
             'gamma': 0.99,
-            'tau': 0.3,
+            'tau': 0.1,
 
             'num_features': 512,
             'num_actions': 7,
@@ -163,8 +167,8 @@ class Trainer:
 
         def feature_model_creation_func(config):
             #model = networks.simple_model.Model(config)
-            model = networks.simple2_model.Model(config)
-            #model = networks.conv_model.Model(config)
+            #model = networks.simple2_model.Model(config)
+            model = networks.conv_model.Model(config)
             #model = networks.empty_model.Model(config)
             return model
 
@@ -197,6 +201,7 @@ class Trainer:
 
         self.num_evaluations_per_epoch = 100
 
+        self.prev_experience = None
         self.replay_buffer = replay_buffer.ReplayBuffer(obs_shape=self.train_env.observation_shape,
                                                         obs_dtype=np.float32,
                                                         action_shape=(self.config.num_actions, ),
@@ -282,31 +287,49 @@ class Trainer:
         return state_opposite
 
     def add_experiences(self, states, actions, rewards, new_states, dones):
-        states = states.detach().cpu().numpy()
-        new_states = new_states.detach().cpu().numpy()
-        
         for state, action, reward, new_state, done in zip(states, actions, rewards, new_states, dones):
             self.replay_buffer.add(state, action, reward, new_state, done)
             self.add_flipped_state(state, action, reward, new_state, done)
 
+    def make_single_step_and_save(self, player_id):
+        states = self.train_env.current_states()
+
+        # agent's network assumes inputs are always related to the first player
+        if player_id == 2:
+            states = self.make_opposite(states)
+
+        states = states.to(self.config.device)
+
+        actions, explorations = self.train_action_strategy.select_action(self.train_agent, states)
+        actions = torch.from_numpy(actions)
+        new_states, rewards, dones = self.train_env.step(player_id, actions)
+
+        if player_id == 2:
+            new_states = self.make_opposite(new_states)
+
+
+        states = states.detach().cpu().numpy()
+        new_states = new_states.detach().cpu().numpy()
+
+        if self.prev_experience is not None:
+            prev_states, prev_actions, prev_rewards, prev_new_states, prev_dones = self.prev_experience
+
+            cur_win_index = rewards == 1
+            prev_rewards[cur_win_index] = -1
+            prev_dones[cur_win_index] = 1
+
+            #cur_lose_index = rewards < 0
+            #prev_rewards[cur_lose_index] = 1
+            #prev_dones[cur_lose_index] = 1
+
+            self.add_experiences(prev_states, prev_actions, prev_rewards, prev_new_states, prev_dones)
+
+        self.prev_experience = deepcopy((states, actions, rewards, new_states, dones))
+        self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
+
     def make_step(self):
-        states1 = self.train_env.current_states().to(self.config.device)
-        actions1, explorations1 = self.train_action_strategy.select_action(self.train_agent, states1)
-        actions1 = torch.from_numpy(actions1)
-        new_states1, rewards1, dones1 = self.train_env.step(1, actions1)
-        self.add_experiences(states1, actions1, rewards1, new_states1, dones1)
-        self.train_env.update_game_rewards(1, rewards1, dones1, explorations1)
-
-        states2 = self.train_env.current_states()
-        opposite_states2 = self.make_opposite(states2).to(self.config.device)
-        # agent's network assumes inputs are always related to player0
-        actions2, explorations2 = self.train_action_strategy.select_action(self.train_agent, opposite_states2)
-
-        actions2 = torch.from_numpy(actions2)
-        new_states2, rewards2, dones2 = self.train_env.step(2, actions2)
-        new_opposite_states2 = self.make_opposite(new_states2)
-        self.add_experiences(opposite_states2, actions2, rewards2, new_opposite_states2, dones2)
-        self.train_env.update_game_rewards(2, rewards2, dones2, explorations2)
+        self.make_single_step_and_save(1)
+        self.make_single_step_and_save(2)
 
     def run_epoch(self, epoch):
         training_started = False
@@ -339,7 +362,7 @@ class Trainer:
                              f'ts: {last_game_stat.player_stats[1].timesteps:2d}, '
                              f'r: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
                              f'last100: '
-                             f'ts: {mean_timesteps[1]:5.2f}\u00B1{std_timesteps[1]:4.2f} / {mean_timesteps[2]:5.2f}\u00B1{std_timesteps[2]:4.2f}, '
+                             f'ts: {mean_timesteps[1]:4.1f}\u00B1{std_timesteps[1]:3.1f} / {mean_timesteps[2]:4.1f}\u00B1{std_timesteps[2]:3.1f}, '
                              f'r: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:5.2f}\u00B1{std_rewards[2]:4.2f}, '
                              f'expl: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}, '
                              f'eval: '

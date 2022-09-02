@@ -66,10 +66,10 @@ class PlayerStat:
         self.exploration_steps += exploration_step
         
 class GameStat:
-    def __init__(self, game_id):
+    def __init__(self, game_id, player_ids):
         self.game_id = game_id
 
-        self.player_stats = {player_id:PlayerStat() for player_id in [1, 2]}
+        self.player_stats = {player_id:PlayerStat() for player_id in player_ids}
 
     def update(self, player_id, reward, exploration):
         self.player_stats[player_id].update(reward, exploration)
@@ -82,6 +82,8 @@ class ConnectX:
         self.num_rows = config.rows
         self.inarow = config.inarow
 
+        self.player_ids = [1, 2]
+
         self.observation_shape = (1, self.num_rows, self.num_actions)
         self.observation_dtype = torch.float32
 
@@ -91,7 +93,7 @@ class ConnectX:
         self.reset()
 
     def create_new_game(self):
-        gs = GameStat(self.new_game_index)
+        gs = GameStat(self.new_game_index, self.player_ids)
         self.new_game_index += 1
         return gs
 
@@ -135,6 +137,16 @@ class ConnectX:
 
             if done:
                 self.games[game_id, ...] = 0
+
+                for other_player_id in self.player_ids:
+                    if other_player_id != player_id:
+                        other_reward = reward
+                        if reward == 1:
+                            other_reward = -1
+                        elif reward < 0:
+                            other_reward = 1
+                            
+                        gs.update(other_player_id, other_reward, exploration)
 
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
