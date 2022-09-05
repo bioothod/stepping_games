@@ -1,10 +1,13 @@
 import joblib
+import random
 
 from collections import defaultdict
 from easydict import EasyDict
 
 import numpy as np
 import torch
+
+from replay_buffer import ReplayBuffer
 
 @torch.jit.script
 def check_reward(game, player_id, num_rows, num_columns, inarow):
@@ -54,6 +57,23 @@ def step_single_game(game, player_id, action, num_rows, num_columns, inarow):
 
     return game, float(reward), float(done)
 
+def step_games(games, player_id, actions, num_rows, num_columns, inarow):
+    batch_size = actions.shape[0]
+    non_zero = torch.count_nonzero(games[torch.arange(batch_size, dtype=torch.int64), :, :, actions], 2).squeeze(1)
+
+    print(f'actions: {actions.shape}, non_zero: {non_zero.shape}')
+    invalid_action_index_batch = non_zero == num_rows
+    good_action_index_batch = non_zero < num_rows
+
+    good_actions_index = actions[good_action_index_batch]
+    games[good_action_index_batch, :, num_rows - non_zero - 1, good_actions_index] = player_id
+    
+    rewards, dones = check_reward(games, player_id, num_rows, num_columns, inarow)
+    rewards = torch.where(invalid_action_index_batch, float(-10), rewards)
+    dones = torch.where(invalid_action_index_batch, float(1), dones)
+
+    return games, rewards, dones
+
 class PlayerStat:
     def __init__(self):
         self.timesteps = 0
@@ -75,7 +95,9 @@ class GameStat:
         self.player_stats[player_id].update(reward, exploration)
 
 class ConnectX:
-    def __init__(self, config: EasyDict, num_games: int):
+    def __init__(self, config: EasyDict, num_games: int, replay_buffer: ReplayBuffer):
+        self.replay_buffer = replay_buffer
+        
         self.num_games = num_games
         self.num_actions = config.columns
         self.num_columns = config.columns
@@ -131,16 +153,16 @@ class ConnectX:
         return self.completed_games[-1]
     
     def update_game_rewards(self, player_id, rewards, dones, explorations):
+        reset_game_ids = []
         for game_id, (reward, done, exploration) in enumerate(zip(rewards, dones, explorations)):
             gs = self.current_games[game_id]
             gs.update(player_id, reward, exploration)
 
             if done:
-                self.games[game_id, ...] = 0
+                reset_game_ids.append(game_id)
 
                 for other_player_id in self.player_ids:
                     if other_player_id != player_id:
-                        other_reward = reward
                         if reward == 1:
                             other_reward = -1
                         elif reward < 0:
@@ -150,6 +172,15 @@ class ConnectX:
 
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
+
+        self.games[reset_game_ids, ...] = 0
+        return
+    
+        if self.replay_buffer is not None and random.random() > 0.5 and len(self.replay_buffer) >= len(reset_game_ids):
+            sample, _, _, _, _ = self.replay_buffer.sample(len(reset_game_ids))
+            self.games[reset_game_ids, ...] = sample.detach().cpu()
+        else:
+            self.games[reset_game_ids, ...] = 0
 
     def step(self, player, actions):
         player = torch.FloatTensor([player])[0]
@@ -173,6 +204,12 @@ class ConnectX:
                 self.games[idx, ...] = game
                 rewards[idx] = reward
                 dones[idx] = done
+
+        self.total_steps += len(self.games)
+        return self.games, rewards, dones
+
+    def step1(self, player_id, actions):
+        self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
         return self.games, rewards, dones

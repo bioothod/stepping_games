@@ -2,6 +2,9 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from .conv_model import ConvBlock
 
 class Model(nn.Module):
     def __init__(self, config):
@@ -9,18 +12,15 @@ class Model(nn.Module):
 
         self.config = config
 
-        num_output_conv_features = 64
+        num_output_conv_features = 128
         num_input_linear_features = num_output_conv_features * self.config.rows * self.config.columns
-        num_linear_features = 4096
 
         self.conv_encoder = nn.Sequential(
             nn.Conv2d(1, 2, 1),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(2),
-            
-            nn.Conv2d(2, 64, 4, padding='same', padding_mode='zeros'),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(64),
+
+            ConvBlock(2, 128, 4, activation=F.relu),
         )
         
         self.linear_encoder = nn.Sequential(

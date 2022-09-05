@@ -5,9 +5,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ConvBlock(nn.Module):
-    def __init__(self, num_inputs, num_outputs, kernel_size=3):
+    def __init__(self, num_inputs, num_outputs, kernel_size=3, activation=F.gelu):
         super().__init__()
 
+        self.activation = activation
         self.conv = nn.Conv2d(num_inputs, num_outputs, kernel_size, padding='same', padding_mode='zeros')
         self.bn = nn.BatchNorm2d(num_outputs)
         self.shortcut = None
@@ -21,7 +22,7 @@ class ConvBlock(nn.Module):
             shortcut = self.shortcut(inputs)
 
         x += shortcut
-        x = F.gelu(x)
+        x = self.activation(x)
         x = self.bn(x)
         return x
 
