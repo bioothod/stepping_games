@@ -2,10 +2,7 @@ import itertools
 import os
 import random
 
-from collections import defaultdict
-from copy import deepcopy
 from easydict import EasyDict as edict
-from time import perf_counter
 
 import numpy as np
 import torch
@@ -16,13 +13,11 @@ torch.backends.cuda.matmul.allow_tf32 = True
 import action_strategies
 import connectx_impl
 import gym_env
-import ddqn
 import logger
 from multiprocess_env import MultiprocessEnv
 import networks
-import replay_buffer
 
-class Trainer:
+class BaseTrainer:
     def __init__(self):
         self.train_seed = 444
         self.eval_seed = 555
@@ -35,7 +30,7 @@ class Trainer:
         #device = 'cpu'
 
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_selfplay_4',
+            'checkpoints_dir': 'checkpoints_simple3_selfplay_3',
             'device': torch.device(device),
             
             'rows': 6,
@@ -48,9 +43,7 @@ class Trainer:
             'gamma': 0.99,
             'tau': 0.1,
 
-            'player_ids': [1, 2],
-            'replay_buffer_size': 100_000_000,
-
+            'num_features': 512,
             'num_actions': 7,
 
             'num_warmup_batches': 1,
@@ -76,22 +69,8 @@ class Trainer:
 
         self.logger.info(f'config:\n{config_message}')
 
-        def feature_model_creation_func(config):
-            #model = networks.simple_model.Model(config)
-            #model = networks.simple2_model.Model(config)
-            model = networks.simple3_model.Model(config)
-            #model = networks.conv_model.Model(config)
-            #model = networks.empty_model.Model(config)
-            return model
-
-        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=300_000_000)
         self.eval_action_strategy = action_strategies.GreedyStrategy()
-
-        self.train_agent = ddqn.DDQN('ddqn', self.config, feature_model_creation_func, self.logger)
         self.eval_agent = 'negamax'
-
-        self.train_agent_name = 'selfplay_agent'
-        model_loaded = self.try_load(self.train_agent_name, self.train_agent)
 
         self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games, replay_buffer=None)
 
@@ -108,19 +87,12 @@ class Trainer:
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
 
         self.num_evaluations_per_epoch = 100
-
         self.evaluation_scores = []
 
         self.max_eval_metric = 0.0
-        if model_loaded:
-            eval_time_start = perf_counter()
-            self.max_eval_metric, _ = self.evaluate()
-            eval_time = perf_counter() - eval_time_start
 
-            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
-
-    def evaluate(self):
-        self.train_agent.set_training_mode(False)
+    def evaluate(self, train_agent):
+        train_agent.set_training_mode(False)
         evaluation_rewards = []
         
         while len(evaluation_rewards) < self.num_evaluations_per_epoch:
@@ -131,7 +103,7 @@ class Trainer:
             episode_rewards = [0.0] * batch_size
 
             while True:
-                actions, _ = self.eval_action_strategy.select_action(self.train_agent, states)
+                actions, _ = self.eval_action_strategy.select_action(train_agent, states)
                 new_states, rewards, dones, infos = self.eval_env.step(worker_ids, actions)
 
                 ready_states = []
@@ -156,20 +128,16 @@ class Trainer:
         
         return wins, evaluation_rewards
 
-    def make_step(self):
-        for player_id in self.config.player_ids:
-            rewards, dones, explorations = self.model.make_single_step_and_save(player_id)
-            self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
+    def try_train(self):
+        raise NotImplementedError('method @try_train() needs to be implemented')
 
-        training_started = self.model.try_train()
-        return training_started
-
-    def run_epoch(self, epoch):
+    def run_epoch(self, train_agent):
         training_started = False
 
         for _ in range(100):
-            self.train_agent.set_training_mode(False)
-            training_started = self.make_step()
+            train_agent.set_training_mode(False)
+
+            training_started = self.try_train()
 
         if training_started:
             mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps = self.train_env.completed_games_stats(100)
@@ -178,7 +146,7 @@ class Trainer:
 
             last_game_stat = self.train_env.last_game_stats()
 
-            eval_metric, eval_rewards = self.evaluate()
+            eval_metric, eval_rewards = self.evaluate(train_agent)
             self.evaluation_scores += eval_rewards
 
             mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
@@ -188,7 +156,6 @@ class Trainer:
 
             self.logger.info(f'{self.train_env.total_steps:6d}: '
                              f'games: {len(self.train_env.completed_games):5d}, '
-                             f'buffer%: {self.replay_buffer.filled()*100:2.0f}, '
                              f'last: '
                              f'ts: {last_game_stat.player_stats[1].timesteps:2d}, '
                              f'r: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
@@ -204,9 +171,9 @@ class Trainer:
             if eval_metric > self.max_eval_metric:
                 self.max_eval_metric = eval_metric
 
-                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{self.train_agent_name}_{eval_metric:.0f}.ckpt')
-                self.train_agent.save(checkpoint_path)
-                self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {self.train_agent_name} -> {checkpoint_path}')
+                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
+                train_agent.save(checkpoint_path)
+                self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {train_agent.name} -> {checkpoint_path}')
 
     def try_load(self, name, model):
         max_metric = None
@@ -244,21 +211,4 @@ class Trainer:
         return False
         
     def stop(self):
-        self.train_env.close()
         self.eval_env.close()
-
-def main():
-    trainer = Trainer()
-    for epoch in itertools.count():
-        try:
-            trainer.run_epoch(epoch)
-        except Exception as e:
-            print(f'type: {type(e)}, exception: {e}')
-            trainer.stop()
-
-            if type(e) != KeyboardInterrupt:
-                raise
-
-        
-if __name__ == '__main__':
-    main()

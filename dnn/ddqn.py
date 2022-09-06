@@ -1,14 +1,21 @@
+import itertools
+
+from copy import deepcopy
+from time import perf_counter
+
 import numpy as np
 import torch
 import torch.nn as nn
 
+
+import action_strategies
+import networks
 import replay_buffer
+import train_selfplay
 
-class DDQNModel(nn.Module):
-    def __init__(self, config, feature_model_creation_func, logger):
+class DDQN(nn.Module):
+    def __init__(self, config):
         super().__init__()
-
-        self.feature_model = feature_model_creation_func(config)
 
         hidden_dims = [config.num_features] + config.hidden_dims
         modules = []
@@ -27,8 +34,7 @@ class DDQNModel(nn.Module):
         self.output_adv = nn.Linear(hidden_dims[-1], config.num_actions)
 
     def forward(self, inputs):
-        low_level_features = self.feature_model(inputs)
-        features = self.features(low_level_features)
+        features = self.features(inputs)
 
         a = self.output_adv(features)
         v = self.output_value(features)
@@ -37,22 +43,31 @@ class DDQNModel(nn.Module):
         q = v + a - a.mean(1, keepdim=True).expand_as(a)
         return q
 
-class DDQN:
+
+class FullModel(nn.Module):
+    def __init__(self, config, feature_model_creation_func):
+        super().__init__()
+
+        self.feature_model = feature_model_creation_func(config)
+        self.action_model = DDQN(config)
+
+    def forward(self, inputs):
+        features = self.feature_model(inputs)
+        actions = self.action_model(features)
+        return actions
+
+class ModelWrapper:
     def __init__(self, name, config, feature_model_creation_func, logger):
         #super().__init__(name, config)
         self.logger = logger
         self.name = name
-        self.config = config
 
-        self.prev_experience = None
-        self.replay_buffer = replay_buffer.ReplayBuffer(obs_shape=self.config.observation_shape,
-                                                        obs_dtype=np.float32,
-                                                        action_shape=(self.config.num_actions, ),
-                                                        capacity=self.config.replay_buffer_size,
-                                                        device=self.config.device)
+        self.device = config.device
+        self.gamma = config.gamma
+        self.tau = config.tau
 
-        self.model = DDQNModel(config, feature_model_creation_func, logger).to(config.device)
-        self.target_model = DDQNModel(config, feature_model_creation_func, logger).to(config.device)
+        self.model = FullModel(config, feature_model_creation_func).to(config.device)
+        self.target_model = FullModel(config, feature_model_creation_func).to(config.device)
         self.target_model.train(False)
 
         self.update_network(tau=1.0)
@@ -73,7 +88,7 @@ class DDQN:
         argmax_a_q_sp = self.model(next_states).max(1)[1]
         q_sp = self.target_model(next_states).detach()
         max_a_q_sp = q_sp[np.arange(batch_size), argmax_a_q_sp].unsqueeze(1)
-        target_q_sa = rewards + self.config.gamma * max_a_q_sp * (1 - is_terminals)
+        target_q_sa = rewards + self.gamma * max_a_q_sp * (1 - is_terminals)
 
         q_sa = self.model(states).gather(1, actions)
 
@@ -86,7 +101,7 @@ class DDQN:
         self.value_opt.step()
 
     def update_network(self, tau=None):
-        tau = self.config.tau if tau is None else tau
+        tau = self.tau if tau is None else tau
         for target, online in zip(self.target_model.parameters(), self.model.parameters()):
             target_ratio = (1.0 - tau) * target.data
             online_ratio = tau * online.data
@@ -113,7 +128,7 @@ class DDQN:
     def _format(self, state):
         x = state
         if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x, device=self.config.device, dtype=torch.float32)
+            x = torch.tensor(x, device=self.device, dtype=torch.float32)
         return x
 
     def __call__(self, state):
@@ -122,7 +137,43 @@ class DDQN:
         action = self.model(state)
         return action
 
+class Trainer(train_selfplay.BaseTrainer):
+    def __init__(self):
+        super().__init__()
+
+        def feature_model_creation_func(config):
+            #model = networks.simple_model.Model(config)
+            #model = networks.simple2_model.Model(config)
+            model = networks.simple3_model.Model(config)
+            #model = networks.conv_model.Model(config)
+            #model = networks.empty_model.Model(config)
+            return model
+
+        self.train_action_strategy = action_strategies.EGreedyExpStrategy(init_epsilon=1.0, min_epsilon=0.1, decay_steps=300_000_000)
+
+        self.train_agent = ModelWrapper('ddqn', self.config, feature_model_creation_func, self.logger)
+
+        self.train_agent_name = 'selfplay_agent'
+        model_loaded = self.try_load(self.train_agent_name, self.train_agent)
+
+        self.prev_experience = None
+        self.replay_buffer = replay_buffer.ReplayBuffer(obs_shape=self.config.observation_shape,
+                                                        obs_dtype=np.float32,
+                                                        action_shape=(self.config.num_actions, ),
+                                                        capacity=100_000_000,
+                                                        device=self.config.device)
+
+        self.max_eval_metric = 0.0
+        if model_loaded:
+            eval_time_start = perf_counter()
+            self.max_eval_metric, _ = self.evaluate(self.train_agent)
+            eval_time = perf_counter() - eval_time_start
+
+            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
+
     def try_train(self):
+        self.make_step()
+
         if len(self.replay_buffer) < self.config.batch_size * self.config.num_warmup_batches:
             return False
 
@@ -131,10 +182,10 @@ class DDQN:
             self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
             self.config.batch_size = new_batch_size
 
-        self.set_training_mode(True)
+        self.train_agent.set_training_mode(True)
         experiences = self.replay_buffer.sample(self.config.batch_size)
-        self.train(experiences)
-        self.update_network()
+        self.train_agent.train(experiences)
+        self.train_agent.update_network()
 
         return True
 
@@ -189,5 +240,25 @@ class DDQN:
             self.add_experiences(prev_states, prev_actions, prev_rewards, prev_new_states, prev_dones)
 
         self.prev_experience = deepcopy((states, actions, rewards, new_states, dones))
+        self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
 
-        return rewards, dones, explorations
+    def make_step(self):
+        self.make_single_step_and_save(1)
+        self.make_single_step_and_save(2)
+
+
+def main():
+    trainer = Trainer()
+    for epoch in itertools.count():
+        try:
+            trainer.run_epoch(trainer.train_agent)
+        except Exception as e:
+            print(f'type: {type(e)}, exception: {e}')
+            trainer.stop()
+
+            if type(e) != KeyboardInterrupt:
+                raise
+
+
+if __name__ == '__main__':
+    main()
