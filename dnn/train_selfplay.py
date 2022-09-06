@@ -72,8 +72,6 @@ class BaseTrainer:
         self.eval_action_strategy = action_strategies.GreedyStrategy()
         self.eval_agent = 'negamax'
 
-        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games, replay_buffer=None)
-
         make_args_fn = lambda: {}
         def make_env_fn(seed=None):
             torch.manual_seed(seed)

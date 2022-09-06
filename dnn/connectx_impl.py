@@ -173,10 +173,10 @@ class ConnectX:
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
 
-        self.games[reset_game_ids, ...] = 0
-        return
+        #self.games[reset_game_ids, ...] = 0
+        #return
     
-        if self.replay_buffer is not None and random.random() > 0.5 and len(self.replay_buffer) >= len(reset_game_ids):
+        if self.replay_buffer is not None and random.random() > 0.9 and len(self.replay_buffer) >= len(reset_game_ids):
             sample, _, _, _, _ = self.replay_buffer.sample(len(reset_game_ids))
             self.games[reset_game_ids, ...] = sample.detach().cpu()
         else:

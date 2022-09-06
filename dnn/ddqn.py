@@ -9,6 +9,7 @@ import torch.nn as nn
 
 
 import action_strategies
+import connectx_impl
 import networks
 import replay_buffer
 import train_selfplay
@@ -162,6 +163,8 @@ class Trainer(train_selfplay.BaseTrainer):
                                                         action_shape=(self.config.num_actions, ),
                                                         capacity=100_000_000,
                                                         device=self.config.device)
+
+        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games, replay_buffer=self.replay_buffer)
 
         self.max_eval_metric = 0.0
         if model_loaded:
