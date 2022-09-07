@@ -20,7 +20,9 @@ class Model(nn.Module):
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(2),
 
-            ConvBlock(2, 128, 4, activation=F.relu),
+            nn.Conv2d(2, 128, 4, padding='same', padding_mode='zeros'),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(128),
         )
         
         self.linear_encoder = nn.Sequential(
