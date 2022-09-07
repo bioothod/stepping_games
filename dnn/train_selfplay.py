@@ -18,49 +18,29 @@ from multiprocess_env import MultiprocessEnv
 import networks
 
 class BaseTrainer:
-    def __init__(self):
-        self.train_seed = 444
-        self.eval_seed = 555
-        
-        torch.manual_seed(self.train_seed)
-        np.random.seed(self.train_seed)
-        random.seed(self.train_seed)
+    def __init__(self, config):
+        config.train_seed = 444
+        config.eval_seed = 555
 
-        device = 'cuda:0'
-        #device = 'cpu'
+        torch.manual_seed(config.train_seed)
+        np.random.seed(config.train_seed)
+        random.seed(config.train_seed)
 
-        self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_selfplay_3',
-            'device': torch.device(device),
-            
-            'rows': 6,
-            'columns': 7,
-            'inarow': 4,
+        config.device = torch.device('cuda:0')
+        config.rows = 6
+        config.columns = 7
+        config.inarow = 4
+        config.player_ids = [1, 2]
+        config.num_actions = config.columns
+        config.observation_shape = [1, self.config.rows, self.config.columns]
 
-            'init_lr': 1e-4,
-            'min_lr': 1e-5,
-
-            'gamma': 0.99,
-            'tau': 0.1,
-
-            'num_features': 512,
-            'num_actions': 7,
-
-            'num_warmup_batches': 1,
-            'batch_size': 1024,
-            'max_batch_size': 1024*32,
-
-            'train_num_games': 1024,
-
-            'hidden_dims': [128],
-        })
-        self.config.observation_shape = [1, self.config.rows, self.config.columns]
+        self.config = config
 
         os.makedirs(self.config.checkpoints_dir, exist_ok=True)
 
-        self.config.logfile = os.path.join(self.config.checkpoints_dir, 'ddqn.log')
+        self.config.logfile = os.path.join(self.config.checkpoints_dir, 'train.log')
         self.config.log_to_stdout = True
-        self.logger = logger.setup_logger('ddqn', self.config.logfile, log_to_stdout=self.config.log_to_stdout)
+        self.logger = logger.setup_logger('t', self.config.logfile, log_to_stdout=self.config.log_to_stdout)
 
         config_message = []
         for k, v in self.config.items():
@@ -82,7 +62,7 @@ class BaseTrainer:
             return gym_env.ConnectXGym(self.config, pair)
 
         eval_num_workers = 50
-        self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.eval_seed, eval_num_workers)
+        self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.config.eval_seed, eval_num_workers)
 
         self.num_evaluations_per_epoch = 100
         self.evaluation_scores = []
@@ -129,20 +109,20 @@ class BaseTrainer:
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
 
-    def run_epoch(self, train_agent):
+    def run_epoch(self, train_env, train_agent):
         training_started = False
 
-        for _ in range(100):
+        for _ in range(self.config.eval_after_train_steps):
             train_agent.set_training_mode(False)
 
             training_started = self.try_train()
 
         if training_started:
-            mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps = self.train_env.completed_games_stats(100)
+            mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps = train_env.completed_games_stats(100)
             if len(mean_rewards) == 0:
                 return
 
-            last_game_stat = self.train_env.last_game_stats()
+            last_game_stat = train_env.last_game_stats()
 
             eval_metric, eval_rewards = self.evaluate(train_agent)
             self.evaluation_scores += eval_rewards
@@ -150,10 +130,12 @@ class BaseTrainer:
             mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
             std_100_eval_score = np.std(self.evaluation_scores[-100:])
 
+            mean_eval_score = np.mean(self.evaluation_scores)
+
             wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
 
-            self.logger.info(f'{self.train_env.total_steps:6d}: '
-                             f'games: {len(self.train_env.completed_games):5d}, '
+            self.logger.info(f'{train_env.total_steps:6d}: '
+                             f'games: {len(train_env.completed_games):5d}, '
                              f'last: '
                              f'ts: {last_game_stat.player_stats[1].timesteps:2d}, '
                              f'r: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
@@ -163,6 +145,7 @@ class BaseTrainer:
                              f'expl: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}, '
                              f'eval: '
                              f'r100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
+                             f'mean: {mean_eval_score:6.3f}, '
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 

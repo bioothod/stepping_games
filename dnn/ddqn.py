@@ -65,7 +65,7 @@ class ModelWrapper:
 
         self.device = config.device
         self.gamma = config.gamma
-        self.tau = config.tau
+        self.tau = config.ddqn_tau
 
         self.model = FullModel(config, feature_model_creation_func).to(config.device)
         self.target_model = FullModel(config, feature_model_creation_func).to(config.device)
@@ -140,7 +140,26 @@ class ModelWrapper:
 
 class Trainer(train_selfplay.BaseTrainer):
     def __init__(self):
-        super().__init__()
+        self.config = edict({
+            'checkpoints_dir': 'checkpoints_simple3_selfplay_3',
+            'eval_after_train_steps': 100,
+
+            'init_lr': 1e-4,
+            'min_lr': 1e-5,
+
+            'gamma': 0.99,
+
+            'num_features': 512,
+
+            'batch_size': 1024,
+            'max_batch_size': 1024*32,
+
+            'train_num_games': 1024,
+
+            'hidden_dims': [128],
+        })
+
+        super().__init__(self.config)
 
         def feature_model_creation_func(config):
             #model = networks.simple_model.Model(config)
@@ -177,7 +196,7 @@ class Trainer(train_selfplay.BaseTrainer):
     def try_train(self):
         self.make_step()
 
-        if len(self.replay_buffer) < self.config.batch_size * self.config.num_warmup_batches:
+        if len(self.replay_buffer) < self.config.batch_size:
             return False
 
         new_batch_size = self.config.batch_size + 1024
@@ -251,13 +270,13 @@ class Trainer(train_selfplay.BaseTrainer):
 
 
 def main():
-    trainer = Trainer()
+    ddqn = Trainer()
     for epoch in itertools.count():
         try:
-            trainer.run_epoch(trainer.train_agent)
+            ddqn.run_epoch(ddqn.train_env, ddqn.train_agent)
         except Exception as e:
-            print(f'type: {type(e)}, exception: {e}')
-            trainer.stop()
+            ddqn.logger.critical(f'type: {type(e)}, exception: {e}')
+            ddqn.stop()
 
             if type(e) != KeyboardInterrupt:
                 raise
