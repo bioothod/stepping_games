@@ -24,33 +24,36 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
             dones[idx] = torch.logical_or(dones[idx], win_idx)
             idx = idx[torch.logical_not(win_idx)]
 
-    for col in torch.arange(0, num_columns, dtype=torch.int64):
+    if len(idx) > 0:
+        for col in torch.arange(0, num_columns, dtype=torch.int64):
+            for row in torch.arange(0, rows_end, dtype=torch.int64):
+                window = games[idx, :, row:row+inarow, col]
+                win_idx = torch.all(window == row_player, -1)
+                win_idx = torch.any(win_idx, 1)
+                dones[idx] = torch.logical_or(dones[idx], win_idx)
+                idx = idx[torch.logical_not(win_idx)]
+
+    if len(idx) > 0:
         for row in torch.arange(0, rows_end, dtype=torch.int64):
-            window = games[idx, :, row:row+inarow, col]
-            win_idx = torch.all(window == row_player, -1)
-            win_idx = torch.any(win_idx, 1)
-            dones[idx] = torch.logical_or(dones[idx], win_idx)
-            idx = idx[torch.logical_not(win_idx)]
+            row_index = torch.arange(row, row+inarow)
+            for col in torch.arange(0, columns_end, dtype=torch.int64):
+                col_index = torch.arange(col, col+inarow)
+                window = games[idx][:, :, row_index, col_index]
+                win_idx = torch.all(window == row_player, -1)
+                win_idx = torch.any(win_idx, 1)
+                dones[idx] = torch.logical_or(dones[idx], win_idx)
+                idx = idx[torch.logical_not(win_idx)]
 
-    for row in torch.arange(0, rows_end, dtype=torch.int64):
-        row_index = torch.arange(row, row+inarow)
-        for col in torch.arange(0, columns_end, dtype=torch.int64):
-            col_index = torch.arange(col, col+inarow)
-            window = games[idx][:, :, row_index, col_index]
-            win_idx = torch.all(window == row_player, -1)
-            win_idx = torch.any(win_idx, 1)
-            dones[idx] = torch.logical_or(dones[idx], win_idx)
-            idx = idx[torch.logical_not(win_idx)]
-
-    for row in torch.arange(inarow-1, num_rows, dtype=torch.int64):
-        row_index = torch.arange(row, row-inarow, -1)
-        for col in torch.arange(0, columns_end, dtype=torch.int64):
-            col_index = torch.arange(col, col+inarow)
-            window = games[idx][:, :, row_index, col_index]
-            win_idx = torch.all(window == row_player, -1)
-            win_idx = torch.any(win_idx, 1)
-            dones[idx] = torch.logical_or(dones[idx], win_idx)
-            idx = idx[torch.logical_not(win_idx)]
+    if len(idx) > 0:
+        for row in torch.arange(inarow-1, num_rows, dtype=torch.int64):
+            row_index = torch.arange(row, row-inarow, -1)
+            for col in torch.arange(0, columns_end, dtype=torch.int64):
+                col_index = torch.arange(col, col+inarow)
+                window = games[idx][:, :, row_index, col_index]
+                win_idx = torch.all(window == row_player, -1)
+                win_idx = torch.any(win_idx, 1)
+                dones[idx] = torch.logical_or(dones[idx], win_idx)
+                idx = idx[torch.logical_not(win_idx)]
 
     default_reward = float(1.0 / float(num_rows * num_columns))
 
