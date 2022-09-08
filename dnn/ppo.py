@@ -275,7 +275,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         model_loaded = self.try_load(self.name, self)
 
-        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games, replay_buffer=None)
+        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games)
 
         self.max_eval_metric = 0.0
         if model_loaded:

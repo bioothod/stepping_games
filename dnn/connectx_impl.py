@@ -1,6 +1,3 @@
-import joblib
-import random
-
 from collections import defaultdict
 from easydict import EasyDict
 
@@ -9,16 +6,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from replay_buffer import ReplayBuffer
-
 @torch.jit.script
 def check_reward(games, player_id, num_rows, num_columns, inarow):
     row_player = torch.ones(inarow) * player_id
     columns_end = num_columns - (inarow - 1)
     rows_end = num_rows - (inarow - 1)
 
-    dones = torch.zeros(len(games), dtype=torch.bool)
-    idx = torch.arange(len(games))
+    row_player = row_player.to(games.device)
+    dones = torch.zeros(len(games), dtype=torch.bool, device=games.device)
+    idx = torch.arange(len(games), device=games.device)
 
     for row in torch.arange(0, num_rows, dtype=torch.int64):
         for col in torch.arange(0, columns_end, dtype=torch.int64):
@@ -62,18 +58,6 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
     dones = torch.where(dones, 1.0, 0.0)
     return rewards, dones
 
-@torch.jit.script
-def step_single_game(game, player_id, action, num_rows, num_columns, inarow):
-    non_zero = torch.count_nonzero(game[:, :, action])
-    if non_zero == num_rows:
-        return game, float(-10.), float(1.)
-
-    game[:, num_rows - non_zero - 1, action] = player_id
-
-    reward, done = check_reward(game, player_id, num_rows, num_columns, inarow)
-
-    return game, float(reward), float(done)
-
 def step_games(games, player_id, actions, num_rows, num_columns, inarow):
     batch_size = actions.shape[0]
     non_zero = torch.count_nonzero(games[torch.arange(batch_size, dtype=torch.int64), :, :, actions], 2).squeeze(1)
@@ -114,14 +98,13 @@ class GameStat:
         self.player_stats[player_id].update(reward, exploration)
 
 class ConnectX:
-    def __init__(self, config: EasyDict, num_games: int, replay_buffer: ReplayBuffer):
-        self.replay_buffer = replay_buffer
-        
+    def __init__(self, config: EasyDict, num_games: int):
         self.num_games = num_games
         self.num_actions = config.columns
         self.num_columns = config.columns
         self.num_rows = config.rows
         self.inarow = config.inarow
+        self.device = config.device
 
         self.player_ids = [1, 2]
 
@@ -139,7 +122,7 @@ class ConnectX:
         return gs
 
     def reset(self):
-        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
+        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype, device=self.device)
 
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
 
@@ -192,42 +175,17 @@ class ConnectX:
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
 
-        if self.replay_buffer is not None and random.random() > 0.9 and len(self.replay_buffer) >= len(reset_game_ids):
-            sample, _, _, _, _ = self.replay_buffer.sample(len(reset_game_ids))
-            self.games[reset_game_ids, ...] = sample.detach().cpu()
-        else:
-            self.games[reset_game_ids, ...] = 0
-
-    def step1(self, player, actions):
-        player = torch.FloatTensor([player])[0]
-        jobs = []
-        for cont_idx in range(0, len(self.games)):
-            game = self.games[cont_idx]
-            action = actions[cont_idx]
-
-            job = joblib.delayed(step_single_game)(game, player, action, self.num_rows, self.num_columns, self.inarow)
-            jobs.append(job)
-
-        with joblib.parallel_backend('threading', n_jobs=16):
-            results = joblib.Parallel(require='sharedmem')(jobs)
-
-            rewards = np.zeros(len(actions), dtype=np.float32)
-            dones = np.zeros(len(actions), dtype=np.float32)
-
-            for idx, res_tuple in enumerate(results):
-                game, reward, done = res_tuple
-
-                self.games[idx, ...] = game
-                rewards[idx] = reward
-                dones[idx] = done
-
-        self.total_steps += len(self.games)
-        return self.games, rewards, dones
+        self.games[reset_game_ids, ...] = 0
 
     def step(self, player_id, actions):
+        actions = actions.to(self.device)
         self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
+        rewards = rewards.detach().cpu().numpy()
+        dones = dones.detach().cpu().numpy()
+        #games = self.games.detach().cpu().numpy()
+
         return self.games, rewards, dones
 
     def close(self):
