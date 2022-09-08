@@ -11,7 +11,6 @@ import torch.nn.functional as F
 
 import connectx_impl
 import networks
-import replay_buffer
 import train_selfplay
 
 
@@ -223,7 +222,7 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_1',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_4',
 
             'eval_after_train_steps': 20,
 
@@ -251,7 +250,7 @@ class PPO(train_selfplay.BaseTrainer):
             'max_gradient_norm': 1.0,
 
             'batch_size': 1024,
-            'max_batch_size': 1024*32,
+            'max_batch_size': 1024*8,
         })
         super().__init__(self.config)
 
@@ -444,12 +443,6 @@ class PPO(train_selfplay.BaseTrainer):
 
         return True
 
-    def add_flipped_states(self, player_id, states, actions, log_probs, rewards, dones, explorations, next_values):
-        states_flipped = np.flip(states, 3)
-        actions_flipped = self.config.num_actions - actions - 1
-
-        self.episode_buffers.add(player_id, states_flipped, actions_flipped, log_probs, rewards, dones, explorations, next_values)
-
     def make_opposite(self, state):
         state_opposite = state.detach().clone()
         state_opposite[state == 1] = 2
@@ -503,7 +496,6 @@ class PPO(train_selfplay.BaseTrainer):
             #prev_dones[cur_lose_index] = 1
 
             self.episode_buffers.add(prev_player_id, prev_states, prev_actions, prev_log_probs, prev_rewards, prev_dones, prev_explorations, prev_next_values)
-            #self.add_flipped_states(prev_player_id, prev_states, prev_actions, prev_log_probs, prev_rewards, prev_dones, prev_explorations, prev_next_values)
 
         self.prev_experience = deepcopy((player_id, states, actions, log_probs, rewards, dones, explorations, next_values))
         self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
