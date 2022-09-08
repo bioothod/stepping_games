@@ -6,44 +6,61 @@ from easydict import EasyDict
 
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 from replay_buffer import ReplayBuffer
 
 @torch.jit.script
-def check_reward(game, player_id, num_rows, num_columns, inarow):
+def check_reward(games, player_id, num_rows, num_columns, inarow):
     row_player = torch.ones(inarow) * player_id
     columns_end = num_columns - (inarow - 1)
     rows_end = num_rows - (inarow - 1)
 
+    dones = torch.zeros(len(games), dtype=torch.bool)
+    idx = torch.arange(len(games))
+
     for row in torch.arange(0, num_rows, dtype=torch.int64):
         for col in torch.arange(0, columns_end, dtype=torch.int64):
-            window = game[:, row, col:col+inarow]
-            if torch.all(window == row_player):
-                return 1.0, 1.0
+            window = games[idx, :, row, col:col+inarow]
+            win_idx = torch.all(window == row_player, -1)
+            win_idx = torch.any(win_idx, 1)
+            dones[idx] = torch.logical_or(dones[idx], win_idx)
+            idx = idx[torch.logical_not(win_idx)]
 
     for col in torch.arange(0, num_columns, dtype=torch.int64):
         for row in torch.arange(0, rows_end, dtype=torch.int64):
-            window = game[:, row:row+inarow, col]
-            if torch.all(window == row_player):
-                return 1.0, 1.0
+            window = games[idx, :, row:row+inarow, col]
+            win_idx = torch.all(window == row_player, -1)
+            win_idx = torch.any(win_idx, 1)
+            dones[idx] = torch.logical_or(dones[idx], win_idx)
+            idx = idx[torch.logical_not(win_idx)]
 
     for row in torch.arange(0, rows_end, dtype=torch.int64):
         row_index = torch.arange(row, row+inarow)
         for col in torch.arange(0, columns_end, dtype=torch.int64):
             col_index = torch.arange(col, col+inarow)
-            window = game[:, row_index, col_index]
-            if torch.all(window == row_player):
-                return 1.0, 1.0
+            window = games[idx][:, :, row_index, col_index]
+            win_idx = torch.all(window == row_player, -1)
+            win_idx = torch.any(win_idx, 1)
+            dones[idx] = torch.logical_or(dones[idx], win_idx)
+            idx = idx[torch.logical_not(win_idx)]
 
     for row in torch.arange(inarow-1, num_rows, dtype=torch.int64):
         row_index = torch.arange(row, row-inarow, -1)
         for col in torch.arange(0, columns_end, dtype=torch.int64):
             col_index = torch.arange(col, col+inarow)
-            window = game[:, row_index, col_index]
-            if torch.all(window == row_player):
-                return 1.0, 1.0
+            window = games[idx][:, :, row_index, col_index]
+            win_idx = torch.all(window == row_player, -1)
+            win_idx = torch.any(win_idx, 1)
+            dones[idx] = torch.logical_or(dones[idx], win_idx)
+            idx = idx[torch.logical_not(win_idx)]
 
-    return float(1.0 / float(num_rows * num_columns)), 0.
+    default_reward = float(1.0 / float(num_rows * num_columns))
+
+    rewards = torch.where(dones, 1.0, default_reward)
+    dones = torch.where(dones, 1.0, 0.0)
+    return rewards, dones
 
 @torch.jit.script
 def step_single_game(game, player_id, action, num_rows, num_columns, inarow):
@@ -61,12 +78,14 @@ def step_games(games, player_id, actions, num_rows, num_columns, inarow):
     batch_size = actions.shape[0]
     non_zero = torch.count_nonzero(games[torch.arange(batch_size, dtype=torch.int64), :, :, actions], 2).squeeze(1)
 
-    print(f'actions: {actions.shape}, non_zero: {non_zero.shape}')
+    #print(f'actions: {actions.shape}, non_zero: {non_zero.shape}')
     invalid_action_index_batch = non_zero == num_rows
     good_action_index_batch = non_zero < num_rows
 
     good_actions_index = actions[good_action_index_batch]
-    games[good_action_index_batch, :, num_rows - non_zero - 1, good_actions_index] = player_id
+    games[good_action_index_batch, :, num_rows - non_zero[good_action_index_batch] - 1, good_actions_index] = player_id
+
+    #print(games[0, 0].type(torch.int32))
     
     rewards, dones = check_reward(games, player_id, num_rows, num_columns, inarow)
     rewards = torch.where(invalid_action_index_batch, float(-10), rewards)
@@ -173,16 +192,13 @@ class ConnectX:
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
 
-        #self.games[reset_game_ids, ...] = 0
-        #return
-    
         if self.replay_buffer is not None and random.random() > 0.9 and len(self.replay_buffer) >= len(reset_game_ids):
             sample, _, _, _, _ = self.replay_buffer.sample(len(reset_game_ids))
             self.games[reset_game_ids, ...] = sample.detach().cpu()
         else:
             self.games[reset_game_ids, ...] = 0
 
-    def step(self, player, actions):
+    def step1(self, player, actions):
         player = torch.FloatTensor([player])[0]
         jobs = []
         for cont_idx in range(0, len(self.games)):
@@ -208,7 +224,7 @@ class ConnectX:
         self.total_steps += len(self.games)
         return self.games, rewards, dones
 
-    def step1(self, player_id, actions):
+    def step(self, player_id, actions):
         self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
