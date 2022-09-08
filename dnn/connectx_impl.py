@@ -1,3 +1,5 @@
+import joblib
+
 from collections import defaultdict
 from easydict import EasyDict
 
@@ -5,6 +7,44 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+@torch.jit.script
+def check_reward_single_game(game, player_id, num_rows, num_columns, inarow):
+    row_player = torch.ones(inarow) * player_id
+    columns_end = num_columns - (inarow - 1)
+    rows_end = num_rows - (inarow - 1)
+
+    for row in torch.arange(0, num_rows, dtype=torch.int64):
+        for col in torch.arange(0, columns_end, dtype=torch.int64):
+            window = game[:, row, col:col+inarow]
+            if torch.all(window == row_player):
+                return 1.0, 1.0
+
+    for col in torch.arange(0, num_columns, dtype=torch.int64):
+        for row in torch.arange(0, rows_end, dtype=torch.int64):
+            window = game[:, row:row+inarow, col]
+            if torch.all(window == row_player):
+                return 1.0, 1.0
+
+
+    for row in torch.arange(0, rows_end, dtype=torch.int64):
+        row_index = torch.arange(row, row+inarow)
+        for col in torch.arange(0, columns_end, dtype=torch.int64):
+            col_index = torch.arange(col, col+inarow)
+            window = game[:, row_index, col_index]
+            if torch.all(window == row_player):
+                return 1.0, 1.0
+
+
+    for row in torch.arange(inarow-1, num_rows, dtype=torch.int64):
+        row_index = torch.arange(row, row-inarow, -1)
+        for col in torch.arange(0, columns_end, dtype=torch.int64):
+            col_index = torch.arange(col, col+inarow)
+            window = game[:, row_index, col_index]
+            if torch.all(window == row_player):
+                return 1.0, 1.0
+
+    return float(1.0 / float(num_rows * num_columns)), 0.
 
 @torch.jit.script
 def check_reward(games, player_id, num_rows, num_columns, inarow):
@@ -18,7 +58,7 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
 
     for row in torch.arange(0, num_rows, dtype=torch.int64):
         for col in torch.arange(0, columns_end, dtype=torch.int64):
-            window = games[idx, :, row, col:col+inarow]
+            window = games[idx][:, :, row, col:col+inarow]
             win_idx = torch.all(window == row_player, -1)
             win_idx = torch.any(win_idx, 1)
             dones[idx] = torch.logical_or(dones[idx], win_idx)
@@ -27,7 +67,7 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
     if len(idx) > 0:
         for col in torch.arange(0, num_columns, dtype=torch.int64):
             for row in torch.arange(0, rows_end, dtype=torch.int64):
-                window = games[idx, :, row:row+inarow, col]
+                window = games[idx][:, :, row:row+inarow, col]
                 win_idx = torch.all(window == row_player, -1)
                 win_idx = torch.any(win_idx, 1)
                 dones[idx] = torch.logical_or(dones[idx], win_idx)
@@ -61,9 +101,21 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
     dones = torch.where(dones, 1.0, 0.0)
     return rewards, dones
 
+@torch.jit.script
+def step_single_game(game, player_id, action, num_rows, num_columns, inarow):
+    non_zero = torch.count_nonzero(game[:, :, action])
+    if non_zero == num_rows:
+        return game, float(-10.), float(1.)
+
+    game[:, num_rows - non_zero - 1, action] = player_id
+
+    reward, done = check_reward_single_game(game, player_id, num_rows, num_columns, inarow)
+
+    return game, float(reward), float(done)
+
 def step_games(games, player_id, actions, num_rows, num_columns, inarow):
-    batch_size = actions.shape[0]
-    non_zero = torch.count_nonzero(games[torch.arange(batch_size, dtype=torch.int64), :, :, actions], 2).squeeze(1)
+    num_games = len(games)
+    non_zero = torch.count_nonzero(games[torch.arange(num_games, dtype=torch.int64), :, :, actions], 2).squeeze(1)
 
     #print(f'actions: {actions.shape}, non_zero: {non_zero.shape}')
     invalid_action_index_batch = non_zero == num_rows
@@ -125,14 +177,17 @@ class ConnectX:
         return gs
 
     def reset(self):
-        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype, device=self.device)
+        #self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype, device=self.device)
+        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
+        self.games_multiple = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
 
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
 
         return self.games
 
     def current_states(self):
-        return self.games
+        #return self.games
+        return self.games_multiple
 
     def completed_games_stats(self, num_games):
         rewards = defaultdict(list)
@@ -179,17 +234,74 @@ class ConnectX:
                 self.current_games[game_id] = self.create_new_game()
 
         self.games[reset_game_ids, ...] = 0
+        self.games_multiple[reset_game_ids, ...] = 0
 
-    def step(self, player_id, actions):
-        actions = actions.to(self.device)
-        self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
+    def step_multiple(self, player_id, actions):
+        actions = actions.to(self.games.device)
+
+        self.games_multiple, rewards, dones = step_games(self.games_multiple, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
+
         rewards = rewards.detach().cpu().numpy()
         dones = dones.detach().cpu().numpy()
-        #games = self.games.detach().cpu().numpy()
 
+        return self.games_multiple, rewards, dones
+
+    def step_single(self, player, actions):
+        player = torch.FloatTensor([player])[0]
+        jobs = []
+        for cont_idx in range(0, len(self.games)):
+            game = self.games[cont_idx]
+            action = actions[cont_idx]
+
+            job = joblib.delayed(step_single_game)(game, player, action, self.num_rows, self.num_columns, self.inarow)
+            jobs.append(job)
+
+        with joblib.parallel_backend('threading', n_jobs=16):
+            results = joblib.Parallel(require='sharedmem')(jobs)
+
+            rewards = np.zeros(len(actions), dtype=np.float32)
+            dones = np.zeros(len(actions), dtype=np.float32)
+
+            for idx, res_tuple in enumerate(results):
+                game, reward, done = res_tuple
+
+                self.games[idx, ...] = game
+                rewards[idx] = reward
+                dones[idx] = done
+
+        self.total_steps += len(self.games)
         return self.games, rewards, dones
+
+    def step1(self, player_id, actions):
+        games_multiple, rewards_multiple, dones_multiple = self.step_multiple(player_id, actions)
+        games, rewards, dones = self.step_single(player_id, actions)
+
+        rewards_index = np.arange(len(games))[rewards != rewards_multiple]
+        dones_index = np.arange(len(games))[dones != dones_multiple]
+
+        games_index = games != games_multiple
+        games_index = torch.any(games_index, -1)
+        games_index = torch.any(games_index, -1)
+        games_index = torch.any(games_index, -1)
+        games_index = torch.arange(len(games))[games_index]
+
+        if len(rewards_index) > 0 or len(dones_index) > 0 or len(games_index) > 0:
+            print(f'rewards_index: {len(rewards_index)}: {rewards_index[:5]}')
+            print(f'dones_index: {len(dones_index)}: {dones_index[:5]}')
+            print(f'games_index: {len(games_index)}: {games_index[:5]}')
+
+            idx = games_index[0]
+
+            print(f'multiple:\n{games_multiple[idx, 0, :, :]}\nsingle:\n{games[idx, 0, :, :]}')
+            exit(-1)
+
+        return self.games_multiple, rewards_multiple, dones_multiple
+
+    def step(self, player_id, actions):
+        return self.step_multiple(player_id, actions)
+
 
     def close(self):
         pass
