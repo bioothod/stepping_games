@@ -1,6 +1,7 @@
 import itertools
 
 from copy import deepcopy
+from easydict import EasyDict as edict
 from time import perf_counter
 
 import numpy as np
@@ -65,7 +66,7 @@ class ModelWrapper:
 
         self.device = config.device
         self.gamma = config.gamma
-        self.tau = config.ddqn_tau
+        self.tau = config.tau
 
         self.model = FullModel(config, feature_model_creation_func).to(config.device)
         self.target_model = FullModel(config, feature_model_creation_func).to(config.device)
@@ -141,18 +142,20 @@ class ModelWrapper:
 class Trainer(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_selfplay_3',
+            'checkpoints_dir': 'checkpoints_simple3_ddqn_3',
+
             'eval_after_train_steps': 100,
 
             'init_lr': 1e-4,
             'min_lr': 1e-5,
 
             'gamma': 0.99,
+            'tau': 0.1,
 
             'num_features': 512,
 
             'batch_size': 1024,
-            'max_batch_size': 1024*32,
+            'max_batch_size': 1024*16,
 
             'train_num_games': 1024,
 
@@ -226,7 +229,7 @@ class Trainer(train_selfplay.BaseTrainer):
     def add_experiences(self, states, actions, rewards, new_states, dones):
         for state, action, reward, new_state, done in zip(states, actions, rewards, new_states, dones):
             self.replay_buffer.add(state, action, reward, new_state, done)
-            self.add_flipped_state(state, action, reward, new_state, done)
+            #self.add_flipped_state(state, action, reward, new_state, done)
 
     def make_single_step_and_save(self, player_id):
         states = self.train_env.current_states()
