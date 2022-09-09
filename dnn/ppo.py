@@ -222,19 +222,19 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_4',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_4_new_hyperparameters',
 
             'eval_after_train_steps': 20,
 
             'max_episode_len': 100,
 
-            'policy_optimization_steps': 100,
+            'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
             'policy_stopping_kl': 0.02,
 
-            'value_optimization_steps': 100,
+            'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
-            'value_stopping_mse': 25,
+            'value_stopping_mse': 0.01,
 
             'entropy_loss_weight': 0.01,
 
@@ -365,7 +365,7 @@ class PPO(train_selfplay.BaseTrainer):
         mean_entropy_loss = np.mean(entropy_losses)
         mean_total_loss = np.mean(total_losses)
         mean_kl = np.mean(kls)
-        self.logger.debug(f'optimize_actor: '
+        self.logger.info(f'optimize_actor: '
                          f'experiences: {len(actions)}, '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
                          f'total_loss: {mean_total_loss:.4f}, '
@@ -409,7 +409,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         mean_value_loss = np.mean(value_losses)
         mean_mse = np.mean(mses)
-        self.logger.debug(f'optimize_critic: '
+        self.logger.info(f'optimize_critic: '
                          f'iterations: {len(value_losses)}/{self.config.value_optimization_steps}, '
                          f'value_loss: {mean_value_loss:.4f}, '
                          f'mse: {mean_mse:.3f}, '
