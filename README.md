@@ -7,4 +7,4 @@ and against algorithmic agents.
 * GPU connectX implementation
 * DDQN and PPO implementations suitable for the self-play games
 * PPO with simple3 (conv+linear) model trained with several hours of
-  self-play beats negamax in 6-70% of the cases (depending on the seed)
+  self-play beats negamax in ~80% of the cases (depending on the seed)
