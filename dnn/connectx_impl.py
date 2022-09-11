@@ -117,15 +117,12 @@ def step_games(games, player_id, actions, num_rows, num_columns, inarow):
     num_games = len(games)
     non_zero = torch.count_nonzero(games[torch.arange(num_games, dtype=torch.int64), :, :, actions], 2).squeeze(1)
 
-    #print(f'actions: {actions.shape}, non_zero: {non_zero.shape}')
     invalid_action_index_batch = non_zero == num_rows
     good_action_index_batch = non_zero < num_rows
 
     good_actions_index = actions[good_action_index_batch]
     games[good_action_index_batch, :, num_rows - non_zero[good_action_index_batch] - 1, good_actions_index] = player_id
 
-    #print(games[0, 0].type(torch.int32))
-    
     rewards, dones = check_reward(games, player_id, num_rows, num_columns, inarow)
     rewards = torch.where(invalid_action_index_batch, float(-10), rewards)
     dones = torch.where(invalid_action_index_batch, float(1), dones)
