@@ -226,7 +226,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'eval_after_train_steps': 20,
 
-            'max_episode_len': 100,
+            'max_episode_len': 42,
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
@@ -241,7 +241,7 @@ class PPO(train_selfplay.BaseTrainer):
             'gamma': 0.99,
             'tau': 0.97,
 
-            'train_num_games': 1024,
+            'train_num_games': 1024*2,
             'init_lr': 1e-4,
 
             'num_features': 512,
@@ -365,7 +365,7 @@ class PPO(train_selfplay.BaseTrainer):
         mean_entropy_loss = np.mean(entropy_losses)
         mean_total_loss = np.mean(total_losses)
         mean_kl = np.mean(kls)
-        self.logger.info(f'optimize_actor: '
+        self.logger.debug(f'optimize_actor: '
                          f'experiences: {len(actions)}, '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
                          f'total_loss: {mean_total_loss:.4f}, '
@@ -409,7 +409,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         mean_value_loss = np.mean(value_losses)
         mean_mse = np.mean(mses)
-        self.logger.info(f'optimize_critic: '
+        self.logger.debug(f'optimize_critic: '
                          f'iterations: {len(value_losses)}/{self.config.value_optimization_steps}, '
                          f'value_loss: {mean_value_loss:.4f}, '
                          f'mse: {mean_mse:.3f}, '
@@ -487,6 +487,8 @@ class PPO(train_selfplay.BaseTrainer):
         if self.prev_experience is not None:
             prev_player_id, prev_states, prev_actions, prev_log_probs, prev_rewards, prev_dones, prev_explorations, prev_next_values = self.prev_experience
 
+            prev_dones[dones == 1] = 1
+
             cur_win_index = rewards == 1
             prev_rewards[cur_win_index] = -1
             prev_dones[cur_win_index] = 1
@@ -510,7 +512,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.episode_buffers.reset()
         self.episode_lengths *= 0
 
-        while len(self.episode_buffers) < self.config.batch_size:
+        while len(self.episode_buffers) < self.config.batch_size*2:
             #self.logger.info(f'fill_episode_buffer: completed_games: {len(self.episode_buffers.completed_games)}, experiences: {len(self.episode_buffers)}, batch_size: {self.config.batch_size}')
             self.make_step()
 
