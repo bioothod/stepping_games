@@ -318,7 +318,9 @@ class PPO(train_selfplay.BaseTrainer):
         return x
 
     def __call__(self, states):
-        states = torch.from_numpy(states).to(self.config.device)
+        states = torch.from_numpy(states)
+        states = self.make_state(self.config.eval_player_id, states)
+        states = states.to(self.config.device)
         #actions = self.actor.select_actions(states)
         actions = self.actor.greedy_actions(states)
         actions = F.one_hot(actions, self.config.num_actions)

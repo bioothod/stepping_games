@@ -1,4 +1,3 @@
-import itertools
 import os
 import random
 
@@ -6,16 +5,13 @@ from easydict import EasyDict as edict
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
 import action_strategies
-import connectx_impl
 import gym_env
 import logger
 from multiprocess_env import MultiprocessEnv
-import networks
 
 class BaseTrainer:
     def __init__(self, config):
@@ -33,6 +29,7 @@ class BaseTrainer:
         config.player_ids = [1, 2]
         config.num_actions = config.columns
         config.observation_shape = [1, self.config.rows, self.config.columns]
+        config.eval_player_id = 1
 
         self.config = config
 
@@ -54,11 +51,16 @@ class BaseTrainer:
 
         make_args_fn = lambda: {}
         def make_env_fn(seed=None):
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            random.seed(seed)
+            if seed is not None:
+                torch.manual_seed(seed)
+                np.random.seed(seed)
+                random.seed(seed)
 
-            pair = [None, self.eval_agent]
+            if config.eval_player_id == 1:
+                pair = [None, self.eval_agent]
+            else:
+                pair = [self.eval_agent, None]
+
             return gym_env.ConnectXGym(self.config, pair)
 
         eval_num_workers = 50
