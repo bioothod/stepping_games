@@ -94,7 +94,7 @@ class Actor(nn.Module):
 
     def greedy_actions(self, states):
         logits = self.forward(states)
-        actions = torch.argmax(logits)
+        actions = torch.argmax(logits, 1)
         return actions
 
 class SingleEpisodeBuffer:
@@ -180,20 +180,20 @@ class EpisodeBuffers:
     def __len__(self):
         return self.completed_experiences
 
-    def add(self, player_id, states, actions, log_probs, rewards, dones, explorations, next_values):
-        for game_id, game in enumerate(self.current_games[player_id]):
-            state = states[game_id]
-            action = actions[game_id]
-            log_prob = log_probs[game_id]
-            reward = rewards[game_id]
-            done = dones[game_id]
-            exploration = explorations[game_id]
-            next_value = next_values[game_id]
+    def add(self, exp):
+        for game_id, game in enumerate(self.current_games[exp.player_id]):
+            state = exp.states[game_id]
+            action = exp.actions[game_id]
+            log_prob = exp.log_probs[game_id]
+            reward = exp.rewards[game_id]
+            done = exp.dones[game_id]
+            exploration = exp.explorations[game_id]
+            next_value = exp.next_values[game_id]
 
             game.add(state, action, log_prob, reward, exploration)
             if done:
                 game.calculate_rewards(next_value)
-                self.current_games[player_id][game_id] = SingleEpisodeBuffer(self.config, self.critic)
+                self.current_games[exp.player_id][game_id] = SingleEpisodeBuffer(self.config, self.critic)
                 self.completed_games.append(game)
                 self.completed_experiences += len(game)
 
@@ -222,7 +222,7 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_4_new_hyperparameters',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_6',
 
             'eval_after_train_steps': 20,
 
@@ -236,13 +236,13 @@ class PPO(train_selfplay.BaseTrainer):
             'value_clip_range': float('inf'),
             'value_stopping_mse': 0.01,
 
-            'entropy_loss_weight': 0.01,
+            'entropy_loss_weight': 0.1,
 
             'gamma': 0.99,
             'tau': 0.97,
 
             'train_num_games': 1024*2,
-            'init_lr': 1e-4,
+            'init_lr': 1e-5,
 
             'num_features': 512,
             'hidden_dims': [128],
@@ -251,6 +251,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'batch_size': 1024,
             'max_batch_size': 1024*8,
+            'experience_buffer_to_batch_size_ratio': 1.5,
         })
         super().__init__(self.config)
 
@@ -268,7 +269,6 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
 
-        self.episode_lengths = np.zeros(self.config.train_num_games)
 
         self.prev_experience = None
         self.episode_buffers = EpisodeBuffers(self.config, self.critic)
@@ -317,7 +317,8 @@ class PPO(train_selfplay.BaseTrainer):
 
     def __call__(self, states):
         states = torch.from_numpy(states).to(self.config.device)
-        actions = self.actor.select_actions(states)
+        #actions = self.actor.select_actions(states)
+        actions = self.actor.greedy_actions(states)
         actions = F.one_hot(actions, self.config.num_actions)
         return actions
 
@@ -444,7 +445,7 @@ class PPO(train_selfplay.BaseTrainer):
         return True
 
     def make_opposite(self, state):
-        state_opposite = state.detach().clone()
+        state_opposite = torch.zeros_like(state)
         state_opposite[state == 1] = 2
         state_opposite[state == 2] = 1
         return state_opposite
@@ -466,7 +467,7 @@ class PPO(train_selfplay.BaseTrainer):
         if player_id == 2:
             new_states = self.make_opposite(new_states)
 
-        truncated_indexes = np.flatnonzero(self.episode_lengths + 1 == self.config.max_episode_len)
+        truncated_indexes = np.flatnonzero(self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len)
         dones[truncated_indexes] = 1
 
         next_values = np.zeros(len(states), dtype=np.float32)
@@ -477,42 +478,51 @@ class PPO(train_selfplay.BaseTrainer):
                 nv = self.critic(next_truncated_states).detach().cpu().numpy()
                 next_values[truncated_indexes] = nv
 
-        states = states.detach().cpu().numpy()
-        new_states = new_states.detach().cpu().numpy()
+        states = states.detach().clone().cpu().numpy()
+        new_states = new_states.detach().clone().cpu().numpy()
 
-        actions = actions.detach().cpu().numpy()
-        log_probs = log_probs.detach().cpu().numpy()
-        explorations = explorations.detach().cpu().numpy()
+        actions = actions.detach().clone().cpu().numpy()
+        log_probs = log_probs.detach().clone().cpu().numpy()
+        explorations = explorations.detach().clone().cpu().numpy()
+
+        rewards = rewards.detach().clone().cpu().numpy()
+        dones = dones.detach().clone().cpu().numpy()
 
         if self.prev_experience is not None:
-            prev_player_id, prev_states, prev_actions, prev_log_probs, prev_rewards, prev_dones, prev_explorations, prev_next_values = self.prev_experience
-
-            prev_dones[dones == 1] = 1
+            self.prev_experience.dones[dones == 1] = 1
 
             cur_win_index = rewards == 1
-            prev_rewards[cur_win_index] = -1
-            prev_dones[cur_win_index] = 1
+            self.prev_experience.rewards[cur_win_index] = -1
+            self.prev_experience.dones[cur_win_index] = 1
 
             #cur_lose_index = rewards < 0
             #prev_rewards[cur_lose_index] = 1
             #prev_dones[cur_lose_index] = 1
 
-            self.episode_buffers.add(prev_player_id, prev_states, prev_actions, prev_log_probs, prev_rewards, prev_dones, prev_explorations, prev_next_values)
+            self.episode_buffers.add(self.prev_experience)
 
-        self.prev_experience = deepcopy((player_id, states, actions, log_probs, rewards, dones, explorations, next_values))
+        self.prev_experience = edict({
+            'player_id': player_id,
+            'states': states,
+            'actions': actions,
+            'log_probs': log_probs,
+            'rewards': rewards,
+            'dones': dones,
+            'explorations': explorations,
+            'next_values': next_values
+        })
+
         self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
 
     def make_step(self):
         self.make_single_step_and_save(1)
         self.make_single_step_and_save(2)
-        self.episode_lengths += 1
 
     def fill_episode_buffer(self):
         self.train_env.reset()
         self.episode_buffers.reset()
-        self.episode_lengths *= 0
 
-        while len(self.episode_buffers) < self.config.batch_size*2:
+        while len(self.episode_buffers) < self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio:
             #self.logger.info(f'fill_episode_buffer: completed_games: {len(self.episode_buffers.completed_games)}, experiences: {len(self.episode_buffers)}, batch_size: {self.config.batch_size}')
             self.make_step()
 
