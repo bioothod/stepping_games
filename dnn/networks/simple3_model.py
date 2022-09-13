@@ -16,15 +16,11 @@ class Model(nn.Module):
         num_input_linear_features = num_output_conv_features * (self.config.rows - 3) * self.config.columns
 
         self.conv_encoder = nn.Sequential(
-            nn.Conv2d(1, 2, 1),
+            nn.Conv2d(3, 6, 1),
             nn.ReLU(inplace=True),
-            nn.BatchNorm2d(2),
+            nn.BatchNorm2d(6),
 
-            nn.Conv2d(2, 16, 3, padding='same', padding_mode='zeros'),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(16),
-
-            nn.Conv2d(16, 32, 3, padding='same', padding_mode='zeros'),
+            nn.Conv2d(6, 32, 3, padding='same', padding_mode='zeros'),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(32),
 
@@ -32,9 +28,13 @@ class Model(nn.Module):
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(64),
 
+            nn.Conv2d(64, 96, 3, padding='same', padding_mode='zeros'),
+            nn.ReLU(inplace=True),
+            nn.BatchNorm2d(96),
+
             nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
 
-            nn.Conv2d(64, 128, 3, padding='same', padding_mode='zeros'),
+            nn.Conv2d(96, 128, 3, padding='same', padding_mode='zeros'),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(128),
 

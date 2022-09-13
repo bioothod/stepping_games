@@ -446,28 +446,29 @@ class PPO(train_selfplay.BaseTrainer):
 
         return True
 
-    def make_opposite(self, state):
-        state_opposite = torch.zeros_like(state)
-        state_opposite[state == 1] = 2
-        state_opposite[state == 2] = 1
-        return state_opposite
+    def make_state(self, player_id, game_states):
+        num_games = len(game_states)
+
+        states = torch.zeros((1 + len(self.config.player_ids), num_games, self.config.rows, self.config.columns), dtype=torch.float32)
+        states[0, ...] = player_id
+
+        for idx, pid in enumerate(self.config.player_ids):
+            player_idx = game_states[:, 0, ...] == pid
+            states[idx + 1, player_idx] = pid
+
+        states = states.transpose(1, 0)
+        return states
 
     def make_single_step_and_save(self, player_id):
         states = self.train_env.current_states()
-
-        # agent's network assumes inputs are always related to the first player
-        if player_id == 2:
-            states = self.make_opposite(states)
-
+        states = self.make_state(player_id, states)
         states = states.to(self.config.device)
 
         with torch.no_grad():
             actions, log_probs, explorations = self.actor.dist_actions(states)
 
         new_states, rewards, dones = self.train_env.step(player_id, actions)
-
-        if player_id == 2:
-            new_states = self.make_opposite(new_states)
+        new_states = self.make_state(player_id, new_states)
 
         truncated_indexes = np.flatnonzero(self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len)
         dones[truncated_indexes] = 1
