@@ -1,7 +1,6 @@
 import itertools
 
 from easydict import EasyDict as edict
-from copy import deepcopy
 from time import perf_counter
 
 import numpy as np
@@ -11,6 +10,7 @@ import torch.nn.functional as F
 
 import connectx_impl
 import networks
+from print_networks import print_networks
 import train_selfplay
 
 
@@ -222,7 +222,7 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_6',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_7',
 
             'eval_after_train_steps': 20,
 
@@ -269,6 +269,8 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
 
+        self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
+        self.logger.info(f'critic:\n{print_networks("critic", self.critic, verbose=True)}')
 
         self.prev_experience = None
         self.episode_buffers = EpisodeBuffers(self.config, self.critic)
