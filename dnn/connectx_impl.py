@@ -96,9 +96,11 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
                 idx = idx[torch.logical_not(win_idx)]
 
     default_reward = float(1.0 / float(num_rows * num_columns))
+    #default_reward = 0.0
 
     rewards = torch.where(dones, 1.0, default_reward)
-    dones = torch.where(dones, 1.0, 0.0)
+    dones = dones.type(torch.float32)
+
     return rewards, dones
 
 @torch.jit.script
@@ -139,7 +141,10 @@ class PlayerStat:
         self.timesteps += 1
         self.reward += reward
         self.exploration_steps += exploration_step
-        
+
+    def __str__(self):
+        return f'ts: {self.timesteps}, reward: {self.reward:.3f}, expl: {self.exploration_steps}'
+
 class GameStat:
     def __init__(self, game_id, player_ids):
         self.game_id = game_id
@@ -148,6 +153,13 @@ class GameStat:
 
     def update(self, player_id, reward, exploration):
         self.player_stats[player_id].update(reward, exploration)
+
+    def __str__(self):
+        msg = []
+        for player_id, ps in self.player_stats.items():
+            msg.append(f'{player_id}: {ps}')
+        msg = ', '.join(msg)
+        return msg
 
 class ConnectX:
     def __init__(self, config: EasyDict, num_games: int):
@@ -179,6 +191,7 @@ class ConnectX:
         self.games_multiple = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
 
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
+        self.episode_lengths = {player_id:np.zeros(self.num_games, dtype=np.int64) for player_id in self.player_ids}
 
         return self.games
 
@@ -213,23 +226,41 @@ class ConnectX:
         reset_game_ids = []
         for game_id, (reward, done, exploration) in enumerate(zip(rewards, dones, explorations)):
             gs = self.current_games[game_id]
+
+            # this game has been updated and moved to the completed games by the previous player on the previous step
+            if done and gs.player_stats[player_id].timesteps == 0:
+                game = self.games_multiple[game_id]
+                raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, gs: {gs}: completed game with an empty player\n{game}')
+
             gs.update(player_id, reward, exploration)
+
+            self.episode_lengths[player_id][game_id] += 1
 
             if done:
                 reset_game_ids.append(game_id)
 
                 for other_player_id in self.player_ids:
                     if other_player_id != player_id:
+                        other_reward = None
                         if reward == 1:
                             other_reward = -1
-                        elif reward < 0:
-                            other_reward = 1
-                            
-                        gs.update(other_player_id, other_reward, exploration)
+                        #elif reward == -1:
+                        #    other_reward = 1
+
+                        if other_reward:
+                            gs.update(other_player_id, other_reward, exploration)
+
+                for pid in self.player_ids:
+                    if gs.player_stats[pid].timesteps == 0:
+                        game = self.games_multiple[game_id]
+                        raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, other: {pid}, '
+                                         f'gs: {gs}: trying to complete a game with an empty player\n'
+                                         f'{game}')
 
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
 
+        self.episode_lengths[player_id][reset_game_ids] = 0
         self.games[reset_game_ids, ...] = 0
         self.games_multiple[reset_game_ids, ...] = 0
 
@@ -239,10 +270,6 @@ class ConnectX:
         self.games_multiple, rewards, dones = step_games(self.games_multiple, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
-
-        rewards = rewards.detach().cpu().numpy()
-        dones = dones.detach().cpu().numpy()
-
         return self.games_multiple, rewards, dones
 
     def step_single(self, player, actions):
