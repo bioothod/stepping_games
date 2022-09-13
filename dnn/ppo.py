@@ -226,7 +226,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'eval_after_train_steps': 20,
 
-            'max_episode_len': 42,
+            'max_episode_len': 21,
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
