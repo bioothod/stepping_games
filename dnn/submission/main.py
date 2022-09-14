@@ -115,8 +115,8 @@ class Actor(nn.Module):
         return int(action)
 
 config = {
-    #'checkpoint_path': 'submission.ckpt',
-    'checkpoint_path': '/kaggle_simulations/agent/submission.ckpt',
+    'checkpoint_path': 'submission.ckpt',
+    #'checkpoint_path': '/kaggle_simulations/agent/submission.ckpt',
     'rows': 6,
     'columns': 7,
     'inarow': 4,
@@ -129,6 +129,31 @@ actor = Actor(config)
 checkpoint = torch.load(config['checkpoint_path'])
 actor.load_state_dict(checkpoint['actor_state_dict'])
 actor.train(False)
+
+
+if False:
+    import kaggle_environments as kaggle
+    env = kaggle.make('connectx')
+    game = env.train([None, 'random'])
+
+    from time import perf_counter
+
+    start_time = perf_counter()
+    steps = 0
+
+    for game_idx in range(100):
+        state = game.reset()
+
+        for i in range(100):
+            action = actor.forward(state)
+            state, reward, done, info = game.step(action)
+            steps += 1
+            if done:
+                break
+
+    game_time = perf_counter() - start_time
+    rps = game_time / steps
+    print(rps)
 
 if False:
     import os
