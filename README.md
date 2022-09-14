@@ -8,3 +8,5 @@ and against algorithmic agents.
 * DDQN and PPO implementations suitable for the self-play games
 * PPO with simple3 (conv+linear) model trained for several days of
   self-play beats negamax in 90-100% of the cases (depending on the seed)
+
+![Kaggle submission results (~1150 score, ~10 place)](dnn/kaggle_submission.jpg)
