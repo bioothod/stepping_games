@@ -469,7 +469,7 @@ class PPO(train_selfplay.BaseTrainer):
         if player_id == 2:
             new_states = self.make_opposite(new_states)
 
-        truncated_indexes = np.flatnonzero(self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len)
+        truncated_indexes = np.flatnonzero((self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len) and (dones != 1))
         dones[truncated_indexes] = 1
 
         next_values = np.zeros(len(states), dtype=np.float32)
