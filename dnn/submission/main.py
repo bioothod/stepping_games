@@ -103,7 +103,7 @@ class Actor(nn.Module):
         return state
 
     def forward(self, observation):
-        state = actor.create_state(observation)
+        state = self.create_state(observation)
         state = torch.from_numpy(state)
         state = state.unsqueeze(0)
 
