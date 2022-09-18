@@ -222,11 +222,13 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_7',
+            'load_checkpoints_dir': 'checkpoints_simple3_ppo_8',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_8',
+            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
 
-            'max_episode_len': 21,
+            'max_episode_len': 42,
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
@@ -251,7 +253,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'batch_size': 1024,
             'max_batch_size': 1024*8,
-            'experience_buffer_to_batch_size_ratio': 1.5,
+            'experience_buffer_to_batch_size_ratio': 2,
         })
         super().__init__(self.config)
 
@@ -469,7 +471,10 @@ class PPO(train_selfplay.BaseTrainer):
         if player_id == 2:
             new_states = self.make_opposite(new_states)
 
-        truncated_indexes = np.flatnonzero((self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len) and (dones != 1))
+        dones = dones.detach().cpu().numpy()
+        rewards = rewards.detach().clone().cpu().numpy()
+
+        truncated_indexes = np.flatnonzero(np.logical_and(self.train_env.episode_lengths + 1 == self.config.max_episode_len, dones != 1))
         dones[truncated_indexes] = 1
 
         next_values = np.zeros(len(states), dtype=np.float32)
@@ -487,8 +492,6 @@ class PPO(train_selfplay.BaseTrainer):
         log_probs = log_probs.detach().clone().cpu().numpy()
         explorations = explorations.detach().clone().cpu().numpy()
 
-        rewards = rewards.detach().clone().cpu().numpy()
-        dones = dones.detach().clone().cpu().numpy()
 
         if self.prev_experience is not None:
             self.prev_experience.dones[dones == 1] = 1
