@@ -127,7 +127,7 @@ if True:
     }
 
     actor = Actor(config)
-    checkpoint = torch.load(config['checkpoint_path'])
+    checkpoint = torch.load(config['checkpoint_path'], map_location='cpu')
     actor.load_state_dict(checkpoint['actor_state_dict'])
     actor.train(False)
 
