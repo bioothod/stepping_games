@@ -114,21 +114,22 @@ class Actor(nn.Module):
         action = action.squeeze(0).detach().cpu().numpy()
         return int(action)
 
-config = {
-    'checkpoint_path': 'submission.ckpt',
-    #'checkpoint_path': '/kaggle_simulations/agent/submission.ckpt',
-    'rows': 6,
-    'columns': 7,
-    'inarow': 4,
-    'num_actions': 7,
-    'num_features': 512,
-    'hidden_dims': [128],
-}
+if True:
+    config = {
+        #'checkpoint_path': 'submission.ckpt',
+        'checkpoint_path': '/kaggle_simulations/agent/submission.ckpt',
+        'rows': 6,
+        'columns': 7,
+        'inarow': 4,
+        'num_actions': 7,
+        'num_features': 512,
+        'hidden_dims': [128],
+    }
 
-actor = Actor(config)
-checkpoint = torch.load(config['checkpoint_path'])
-actor.load_state_dict(checkpoint['actor_state_dict'])
-actor.train(False)
+    actor = Actor(config)
+    checkpoint = torch.load(config['checkpoint_path'])
+    actor.load_state_dict(checkpoint['actor_state_dict'])
+    actor.train(False)
 
 
 if False:
@@ -154,14 +155,6 @@ if False:
     game_time = perf_counter() - start_time
     rps = game_time / steps
     print(rps)
-
-if False:
-    import os
-    basedir = os.path.dirname(config['checkpoint_path'])
-    submission_checkpoint_path = os.path.join(basedir, 'submission.ckpt')
-    torch.save({
-        'actor_state_dict': actor.state_dict(),
-    }, submission_checkpoint_path)
 
 def my_agent(observation, config):
     action = actor.forward(observation)
