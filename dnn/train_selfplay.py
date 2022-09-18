@@ -50,18 +50,26 @@ class BaseTrainer:
         self.logger.info(f'config:\n{config_message}')
 
         self.eval_action_strategy = action_strategies.GreedyStrategy()
-        self.eval_agent = 'negamax'
 
         make_args_fn = lambda: {}
         def make_env_fn(seed=None):
+            os.environ['CUDA_VISIBLE_DEVICES'] = ''
             torch.manual_seed(seed)
             np.random.seed(seed)
             random.seed(seed)
 
-            pair = [None, self.eval_agent]
-            return gym_env.ConnectXGym(self.config, pair)
+            from submission.main import Actor as eval_agent_model
+            eval_agent = eval_agent_model(config)
+            checkpoint = torch.load(config.eval_checkpoint_path, map_location='cpu')
+            eval_agent.load_state_dict(checkpoint['actor_state_dict'])
+            eval_agent.train(False)
 
-        eval_num_workers = 50
+            eval_agent_func = lambda obs, _: eval_agent.forward(obs)
+
+            pair = [None, eval_agent_func]
+            return gym_env.ConnectXGym(config, pair)
+
+        eval_num_workers = 1
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.config.eval_seed, eval_num_workers)
 
         self.num_evaluations_per_epoch = 100
@@ -149,8 +157,9 @@ class BaseTrainer:
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 
-            if eval_metric > self.max_eval_metric:
-                self.max_eval_metric = eval_metric
+            if eval_metric >= self.max_eval_metric:
+                if eval_metric < 100:
+                    self.max_eval_metric = eval_metric
 
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
                 train_agent.save(checkpoint_path)
@@ -159,10 +168,11 @@ class BaseTrainer:
     def try_load(self, name, model):
         max_metric = None
         checkpoint_path = None
-        
-        for checkpoint_fn in os.listdir(self.config.checkpoints_dir):
+
+        checkpoints_dir = self.config.get('load_checkpoints_dir', self.config['checkpoints_dir'])
+        for checkpoint_fn in os.listdir(checkpoints_dir):
             if checkpoint_fn == f'{name}.ckpt':
-                checkpoint_path = os.path.join(self.config.checkpoints_dir, checkpoint_fn)
+                checkpoint_path = os.path.join(checkpoints_dir, checkpoint_fn)
                 max_metric = 0.0
                 continue
 
@@ -180,7 +190,7 @@ class BaseTrainer:
                 continue
 
             if max_metric is None or metric > max_metric:
-                checkpoint_path = os.path.join(self.config.checkpoints_dir, checkpoint_fn)
+                checkpoint_path = os.path.join(checkpoints_dir, checkpoint_fn)
                 max_metric = metric
 
         if checkpoint_path is not None and max_metric is not None:
