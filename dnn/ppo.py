@@ -228,9 +228,9 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'load_checkpoints_dir': 'checkpoints_simple3_ppo_8',
-            'checkpoints_dir': 'checkpoints_simple3_ppo_8',
-            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'load_checkpoints_dir': 'checkpoints_simple3_ppo_7',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_7',
+            'eval_checkpoint_path1': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
 
@@ -458,22 +458,15 @@ class PPO(train_selfplay.BaseTrainer):
     def make_state(self, player_id, game_states):
         num_games = len(game_states)
 
-<<<<<<< HEAD
         states = torch.zeros((1 + len(self.config.player_ids), num_games, self.config.rows, self.config.columns), dtype=torch.float32)
         states[0, ...] = player_id
 
         for idx, pid in enumerate(self.config.player_ids):
             player_idx = game_states[:, 0, ...] == pid
-            states[idx + 1, player_idx] = pid
+            states[idx + 1, player_idx] = 1
 
         states = states.transpose(1, 0)
         return states
-=======
-    def make_single_step(self, player_id, states):
-        # agent's network assumes inputs are always related to the first player
-        if player_id == 2:
-            states = self.make_opposite(states)
->>>>>>> master
 
     def make_single_step_and_save(self, player_id):
         states = self.train_env.current_states()

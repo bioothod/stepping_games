@@ -190,7 +190,7 @@ class ConnectX:
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
         self.episode_lengths = np.zeros(self.num_games, dtype=np.int64)
 
-        return self.games_multiple
+        return self.games
 
     def current_states(self):
         return self.games
