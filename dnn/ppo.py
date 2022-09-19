@@ -45,6 +45,7 @@ class Actor(nn.Module):
     def __init__(self, config, feature_model_creation_func):
         super().__init__()
 
+        self.train_state_features = True
         self.state_features_model = feature_model_creation_func(config)
 
         hidden_dims = [config.num_features] + config.hidden_dims + [config.num_actions]
@@ -65,7 +66,12 @@ class Actor(nn.Module):
         return state_features
 
     def forward(self, inputs):
-        state_features = self.state_features(inputs)
+        if self.train_state_features:
+            state_features = self.state_features(inputs)
+        else:
+            with torch.no_grad():
+                state_features = self.state_features(inputs)
+
         outputs = self.features(state_features)
         return outputs
 
@@ -222,11 +228,13 @@ class EpisodeBuffers:
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
-            'checkpoints_dir': 'checkpoints_simple3_ppo_7',
+            'load_checkpoints_dir': 'checkpoints_simple3_ppo_8',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_8',
+            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
 
-            'max_episode_len': 21,
+            'max_episode_len': 42,
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
@@ -244,6 +252,8 @@ class PPO(train_selfplay.BaseTrainer):
             'train_num_games': 1024*2,
             'init_lr': 1e-5,
 
+            'num_games_to_stop_training_state_model': 10_000_000,
+
             'num_features': 512,
             'hidden_dims': [128],
 
@@ -251,7 +261,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'batch_size': 1024,
             'max_batch_size': 1024*8,
-            'experience_buffer_to_batch_size_ratio': 1.5,
+            'experience_buffer_to_batch_size_ratio': 2,
         })
         super().__init__(self.config)
 
@@ -285,7 +295,7 @@ class PPO(train_selfplay.BaseTrainer):
             self.max_eval_metric, _ = self.evaluate(self)
             eval_time = perf_counter() - eval_time_start
 
-            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
+            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
 
 
     def set_training_mode(self, training):
@@ -318,10 +328,7 @@ class PPO(train_selfplay.BaseTrainer):
         return x
 
     def __call__(self, states):
-        states = torch.from_numpy(states)
-        states = self.make_state(self.config.eval_player_id, states)
-        states = states.to(self.config.device)
-        #actions = self.actor.select_actions(states)
+        states = torch.from_numpy(states).to(self.config.device)
         actions = self.actor.greedy_actions(states)
         actions = F.one_hot(actions, self.config.num_actions)
         return actions
@@ -451,6 +458,7 @@ class PPO(train_selfplay.BaseTrainer):
     def make_state(self, player_id, game_states):
         num_games = len(game_states)
 
+<<<<<<< HEAD
         states = torch.zeros((1 + len(self.config.player_ids), num_games, self.config.rows, self.config.columns), dtype=torch.float32)
         states[0, ...] = player_id
 
@@ -460,6 +468,12 @@ class PPO(train_selfplay.BaseTrainer):
 
         states = states.transpose(1, 0)
         return states
+=======
+    def make_single_step(self, player_id, states):
+        # agent's network assumes inputs are always related to the first player
+        if player_id == 2:
+            states = self.make_opposite(states)
+>>>>>>> master
 
     def make_single_step_and_save(self, player_id):
         states = self.train_env.current_states()
@@ -472,31 +486,47 @@ class PPO(train_selfplay.BaseTrainer):
         new_states, rewards, dones = self.train_env.step(player_id, actions)
         new_states = self.make_state(player_id, new_states)
 
-        truncated_indexes = np.flatnonzero(self.train_env.episode_lengths[player_id] + 1 == self.config.max_episode_len)
+        dones = dones.detach().cpu().numpy()
+        rewards = rewards.detach().clone().cpu().numpy()
+
+        truncated_indexes = np.flatnonzero(np.logical_and(self.train_env.episode_lengths + 1 == self.config.max_episode_len, dones != 1))
         dones[truncated_indexes] = 1
 
-        next_values = np.zeros(len(states), dtype=np.float32)
-        if len(truncated_indexes) > 0:
+        return edict({
+            'player_id': player_id,
+            'states': states,
+            'actions': actions,
+            'log_probs': log_probs,
+            'rewards': rewards,
+            'dones': dones,
+            'explorations': explorations,
+            'new_states': new_states,
+            'truncated_indexes': truncated_indexes,
+        })
+
+    def make_single_step_and_save(self, player_id):
+        states = self.train_env.current_states()
+
+        step = self.make_single_step(player_id, states)
+
+        next_values = np.zeros(len(step.states), dtype=np.float32)
+        if len(step.truncated_indexes) > 0:
             with torch.no_grad():
-                next_truncated_states = new_states[truncated_indexes, ...]
+                next_truncated_states = step.new_states[truncated_indexes, ...]
                 next_truncated_states = next_truncated_states.to(self.config.device)
                 nv = self.critic(next_truncated_states).detach().cpu().numpy()
-                next_values[truncated_indexes] = nv
+                next_values[step.truncated_indexes] = nv
 
-        states = states.detach().clone().cpu().numpy()
-        new_states = new_states.detach().clone().cpu().numpy()
+        states = step.states.detach().clone().cpu().numpy()
 
-        actions = actions.detach().clone().cpu().numpy()
-        log_probs = log_probs.detach().clone().cpu().numpy()
-        explorations = explorations.detach().clone().cpu().numpy()
-
-        rewards = rewards.detach().clone().cpu().numpy()
-        dones = dones.detach().clone().cpu().numpy()
+        actions = step.actions.detach().clone().cpu().numpy()
+        log_probs = step.log_probs.detach().clone().cpu().numpy()
+        explorations = step.explorations.detach().clone().cpu().numpy()
 
         if self.prev_experience is not None:
-            self.prev_experience.dones[dones == 1] = 1
+            self.prev_experience.dones[step.dones == 1] = 1
 
-            cur_win_index = rewards == 1
+            cur_win_index = step.rewards == 1
             self.prev_experience.rewards[cur_win_index] = -1
             self.prev_experience.dones[cur_win_index] = 1
 
@@ -511,17 +541,25 @@ class PPO(train_selfplay.BaseTrainer):
             'states': states,
             'actions': actions,
             'log_probs': log_probs,
-            'rewards': rewards,
-            'dones': dones,
+            'rewards': step.rewards,
+            'dones': step.dones,
             'explorations': explorations,
             'next_values': next_values
         })
 
-        self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
+        self.train_env.update_game_rewards(player_id, step.rewards, step.dones, explorations)
 
     def make_step(self):
         self.make_single_step_and_save(1)
         self.make_single_step_and_save(2)
+
+        if len(self.train_env.completed_games) > self.config.num_games_to_stop_training_state_model:
+            if self.actor.train_state_features:
+                self.logger.info(f'completed_games: {len(self.train_env.completed_games)}, '
+                                 f'num_games_to_stop_training_state_model: {self.config.num_games_to_stop_training_state_model}: '
+                                 f'finishing training the state model')
+
+            self.actor.train_state_features = False
 
     def fill_episode_buffer(self):
         self.train_env.reset()

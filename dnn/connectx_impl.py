@@ -188,9 +188,9 @@ class ConnectX:
         self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
 
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
-        self.episode_lengths = {player_id:np.zeros(self.num_games, dtype=np.int64) for player_id in self.player_ids}
+        self.episode_lengths = np.zeros(self.num_games, dtype=np.int64)
 
-        return self.games
+        return self.games_multiple
 
     def current_states(self):
         return self.games
@@ -230,7 +230,7 @@ class ConnectX:
 
             gs.update(player_id, reward, exploration)
 
-            self.episode_lengths[player_id][game_id] += 1
+            self.episode_lengths[game_id] += 1
 
             if done:
                 reset_game_ids.append(game_id)
@@ -256,7 +256,7 @@ class ConnectX:
                 self.completed_games.append(gs)
                 self.current_games[game_id] = self.create_new_game()
 
-        self.episode_lengths[player_id][reset_game_ids] = 0
+        self.episode_lengths[reset_game_ids] = 0
         self.games[reset_game_ids, ...] = 0
 
     def step(self, player_id, actions):
