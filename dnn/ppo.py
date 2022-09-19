@@ -295,7 +295,7 @@ class PPO(train_selfplay.BaseTrainer):
             self.max_eval_metric, _ = self.evaluate(self)
             eval_time = perf_counter() - eval_time_start
 
-            self.logger.info(f'initial evaluation metric: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
+            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
 
 
     def set_training_mode(self, training):
@@ -329,7 +329,6 @@ class PPO(train_selfplay.BaseTrainer):
 
     def __call__(self, states):
         states = torch.from_numpy(states).to(self.config.device)
-        #actions = self.actor.select_actions(states)
         actions = self.actor.greedy_actions(states)
         actions = F.one_hot(actions, self.config.num_actions)
         return actions
@@ -462,9 +461,7 @@ class PPO(train_selfplay.BaseTrainer):
         state_opposite[state == 2] = 1
         return state_opposite
 
-    def make_single_step_and_save(self, player_id):
-        states = self.train_env.current_states()
-
+    def make_single_step(self, player_id, states):
         # agent's network assumes inputs are always related to the first player
         if player_id == 2:
             states = self.make_opposite(states)
@@ -485,26 +482,41 @@ class PPO(train_selfplay.BaseTrainer):
         truncated_indexes = np.flatnonzero(np.logical_and(self.train_env.episode_lengths + 1 == self.config.max_episode_len, dones != 1))
         dones[truncated_indexes] = 1
 
-        next_values = np.zeros(len(states), dtype=np.float32)
-        if len(truncated_indexes) > 0:
+        return edict({
+            'player_id': player_id,
+            'states': states,
+            'actions': actions,
+            'log_probs': log_probs,
+            'rewards': rewards,
+            'dones': dones,
+            'explorations': explorations,
+            'new_states': new_states,
+            'truncated_indexes': truncated_indexes,
+        })
+
+    def make_single_step_and_save(self, player_id):
+        states = self.train_env.current_states()
+
+        step = self.make_single_step(player_id, states)
+
+        next_values = np.zeros(len(step.states), dtype=np.float32)
+        if len(step.truncated_indexes) > 0:
             with torch.no_grad():
-                next_truncated_states = new_states[truncated_indexes, ...]
+                next_truncated_states = step.new_states[truncated_indexes, ...]
                 next_truncated_states = next_truncated_states.to(self.config.device)
                 nv = self.critic(next_truncated_states).detach().cpu().numpy()
-                next_values[truncated_indexes] = nv
+                next_values[step.truncated_indexes] = nv
 
-        states = states.detach().clone().cpu().numpy()
-        new_states = new_states.detach().clone().cpu().numpy()
+        states = step.states.detach().clone().cpu().numpy()
 
-        actions = actions.detach().clone().cpu().numpy()
-        log_probs = log_probs.detach().clone().cpu().numpy()
-        explorations = explorations.detach().clone().cpu().numpy()
-
+        actions = step.actions.detach().clone().cpu().numpy()
+        log_probs = step.log_probs.detach().clone().cpu().numpy()
+        explorations = step.explorations.detach().clone().cpu().numpy()
 
         if self.prev_experience is not None:
-            self.prev_experience.dones[dones == 1] = 1
+            self.prev_experience.dones[step.dones == 1] = 1
 
-            cur_win_index = rewards == 1
+            cur_win_index = step.rewards == 1
             self.prev_experience.rewards[cur_win_index] = -1
             self.prev_experience.dones[cur_win_index] = 1
 
@@ -519,13 +531,13 @@ class PPO(train_selfplay.BaseTrainer):
             'states': states,
             'actions': actions,
             'log_probs': log_probs,
-            'rewards': rewards,
-            'dones': dones,
+            'rewards': step.rewards,
+            'dones': step.dones,
             'explorations': explorations,
             'next_values': next_values
         })
 
-        self.train_env.update_game_rewards(player_id, rewards, dones, explorations)
+        self.train_env.update_game_rewards(player_id, step.rewards, step.dones, explorations)
 
     def make_step(self):
         self.make_single_step_and_save(1)

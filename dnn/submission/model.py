@@ -102,16 +102,21 @@ class Actor(nn.Module):
 
         return state
 
+    def greedy_actions(self, states):
+        state_features = self.state_features(states)
+        logits = self.features(state_features)
+
+        actions = torch.argmax(logits, 1)
+        return actions
+
     def forward(self, observation):
         state = self.create_state(observation)
         state = torch.from_numpy(state)
-        state = state.unsqueeze(0)
 
-        state_features = self.state_features(state)
-        logits = self.features(state_features)
+        states = state.unsqueeze(0)
+        actions = self.greedy_actions(states)
 
-        action = torch.argmax(logits, 1)
-        action = action.squeeze(0).detach().cpu().numpy()
+        action = actions.squeeze(0).detach().cpu().numpy()
         return int(action)
 
 defalut_config = {

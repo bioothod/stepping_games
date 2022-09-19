@@ -49,35 +49,44 @@ class BaseTrainer:
 
         self.logger.info(f'config:\n{config_message}')
 
-        self.eval_action_strategy = action_strategies.GreedyStrategy()
-
-        make_args_fn = lambda: {}
-        def make_env_fn(seed=None):
-            os.environ['CUDA_VISIBLE_DEVICES'] = ''
-            torch.manual_seed(seed)
-            np.random.seed(seed)
-            random.seed(seed)
-
-            from submission.main import Actor as eval_agent_model
-            eval_agent = eval_agent_model(config)
-            checkpoint = torch.load(config.eval_checkpoint_path, map_location='cpu')
-            eval_agent.load_state_dict(checkpoint['actor_state_dict'])
-            eval_agent.train(False)
-
-            eval_agent_func = lambda obs, _: eval_agent.forward(obs)
-
-            pair = [None, eval_agent_func]
-            return gym_env.ConnectXGym(config, pair)
-
-        eval_num_workers = 1
-        self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.config.eval_seed, eval_num_workers)
-
         self.num_evaluations_per_epoch = 100
         self.evaluation_scores = []
-
         self.max_eval_metric = 0.0
 
-    def evaluate(self, train_agent):
+        if not config.get('eval_checkpoint_path'):
+            self.eval_agent_name = 'negamax'
+
+            make_args_fn = lambda: {}
+            def make_env_fn(seed=None):
+                os.environ['CUDA_VISIBLE_DEVICES'] = ''
+                torch.manual_seed(seed)
+                np.random.seed(seed)
+                random.seed(seed)
+
+                pair = [None, self.eval_agent_name]
+
+                return gym_env.ConnectXGym(config, pair)
+
+            eval_num_workers = 50
+            self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.config.eval_seed, eval_num_workers)
+            self.evaluate = lambda agent: self.evaluate_multiprocess(agent)
+
+        else:
+            from submission.model import Actor as eval_agent_model
+            import connectx_impl
+
+            self.eval_agent = eval_agent_model(config)
+            checkpoint = torch.load(config.eval_checkpoint_path, map_location='cpu')
+            self.eval_agent.load_state_dict(checkpoint['actor_state_dict'])
+            self.eval_agent.train(False)
+
+            self.eval_agent_name = config.eval_checkpoint_path
+
+            self.eval_env = connectx_impl.ConnectX(config, self.num_evaluations_per_epoch)
+            self.evaluate = lambda agent: self.evaluate_torch(agent)
+
+
+    def evaluate_multiprocess(self, train_agent):
         train_agent.set_training_mode(False)
         evaluation_rewards = []
         
@@ -89,7 +98,10 @@ class BaseTrainer:
             episode_rewards = [0.0] * batch_size
 
             while True:
-                actions, _ = self.eval_action_strategy.select_action(train_agent, states)
+                states = torch.from_numpy(states).to(self.config.device)
+
+                actions = train_agent.actor.greedy_actions(states)
+                actions = actions.detach().cpu().numpy()
                 new_states, rewards, dones, infos = self.eval_env.step(worker_ids, actions)
 
                 ready_states = []
@@ -112,6 +124,41 @@ class BaseTrainer:
         last = evaluation_rewards[-self.num_evaluations_per_epoch:]
         wins = np.count_nonzero(np.array(last) >= 1) / len(last) * 100
         
+        return wins, evaluation_rewards
+
+    def evaluate_torch(self, train_agent):
+        train_agent.set_training_mode(False)
+        evaluation_rewards = []
+
+        train_player_id = 1
+        eval_player_id = 2
+
+        self.eval_env.reset()
+
+        while len(self.eval_env.completed_games) < self.num_evaluations_per_epoch:
+            states = self.eval_env.current_states()
+
+            for player_id in [train_player_id, eval_player_id]:
+                if player_id == train_player_id:
+                    states = states.to(self.config.device)
+                    actions = train_agent.actor.greedy_actions(states)
+                    actions = actions.to(self.eval_env.device)
+                else:
+                    actions = self.eval_agent.greedy_actions(states)
+
+                states, rewards, dones = self.eval_env.step(player_id, actions)
+
+                rewards = rewards.detach().clone().cpu().numpy()
+                dones = dones.detach().clone().cpu().numpy()
+
+                self.eval_env.update_game_rewards(player_id, rewards, dones, np.zeros_like(dones))
+
+        for gs in self.eval_env.completed_games[-self.num_evaluations_per_epoch:]:
+            ps = gs.player_stats[train_player_id]
+            evaluation_rewards.append(ps.reward)
+
+        wins = np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100
+
         return wins, evaluation_rewards
 
     def try_train(self):
@@ -157,7 +204,7 @@ class BaseTrainer:
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 
-            if eval_metric >= self.max_eval_metric:
+            if eval_metric > 0 and eval_metric >= self.max_eval_metric:
                 if eval_metric < 100:
                     self.max_eval_metric = eval_metric
 
