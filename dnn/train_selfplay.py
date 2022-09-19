@@ -52,6 +52,7 @@ class BaseTrainer:
 
         if not config.get('eval_checkpoint_path'):
             self.eval_agent_name = 'negamax'
+            self.eval_player_id = 1
 
             make_args_fn = lambda: {}
             def make_env_fn(seed=None):
@@ -95,7 +96,8 @@ class BaseTrainer:
             episode_rewards = [0.0] * batch_size
 
             while True:
-                states = torch.from_numpy(states).to(self.config.device)
+                states = train_agent.make_state(self.eval_player_id, states)
+                states = states.to(self.config.device)
 
                 actions = train_agent.actor.greedy_actions(states)
                 actions = actions.detach().cpu().numpy()
