@@ -45,6 +45,7 @@ class Actor(nn.Module):
     def __init__(self, config, feature_model_creation_func):
         super().__init__()
 
+        self.train_state_features = True
         self.state_features_model = feature_model_creation_func(config)
 
         hidden_dims = [config.num_features] + config.hidden_dims + [config.num_actions]
@@ -65,7 +66,12 @@ class Actor(nn.Module):
         return state_features
 
     def forward(self, inputs):
-        state_features = self.state_features(inputs)
+        if self.train_state_features:
+            state_features = self.state_features(inputs)
+        else:
+            with torch.no_grad():
+                state_features = self.state_features(inputs)
+
         outputs = self.features(state_features)
         return outputs
 
@@ -245,6 +251,8 @@ class PPO(train_selfplay.BaseTrainer):
 
             'train_num_games': 1024*2,
             'init_lr': 1e-5,
+
+            'num_games_to_stop_training_state_model': 10_000_000,
 
             'num_features': 512,
             'hidden_dims': [128],
@@ -522,6 +530,14 @@ class PPO(train_selfplay.BaseTrainer):
     def make_step(self):
         self.make_single_step_and_save(1)
         self.make_single_step_and_save(2)
+
+        if len(self.train_env.completed_games) > self.config.num_games_to_stop_training_state_model:
+            if self.actor.train_state_features:
+                self.logger.info(f'completed_games: {len(self.train_env.completed_games)}, '
+                                 f'num_games_to_stop_training_state_model: {self.config.num_games_to_stop_training_state_model}: '
+                                 f'finishing training the state model')
+
+            self.actor.train_state_features = False
 
     def fill_episode_buffer(self):
         self.train_env.reset()
