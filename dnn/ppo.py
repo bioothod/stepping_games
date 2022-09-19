@@ -468,8 +468,7 @@ class PPO(train_selfplay.BaseTrainer):
         states = states.transpose(1, 0)
         return states
 
-    def make_single_step_and_save(self, player_id):
-        states = self.train_env.current_states()
+    def make_single_step(self, player_id, states):
         states = self.make_state(player_id, states)
         states = states.to(self.config.device)
 
