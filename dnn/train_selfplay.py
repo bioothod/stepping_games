@@ -136,13 +136,15 @@ class BaseTrainer:
         self.eval_env.reset()
 
         while len(self.eval_env.completed_games) < self.num_evaluations_per_epoch:
-            states = self.eval_env.current_states()
-
             for player_id in [train_player_id, eval_player_id]:
+                states = self.eval_env.current_states()
+
+                if player_id == 2:
+                    states = train_agent.make_opposite(states)
+
                 if player_id == train_player_id:
                     states = states.to(self.config.device)
-                    actions = train_agent.actor.greedy_actions(states)
-                    actions = actions.to(self.eval_env.device)
+                    actions, _, _ = train_agent.actor.dist_actions(states)
                 else:
                     actions = self.eval_agent.greedy_actions(states)
 
@@ -153,7 +155,7 @@ class BaseTrainer:
 
                 self.eval_env.update_game_rewards(player_id, rewards, dones, np.zeros_like(dones))
 
-        for gs in self.eval_env.completed_games[-self.num_evaluations_per_epoch:]:
+        for gs in self.eval_env.completed_games[:self.num_evaluations_per_epoch]:
             ps = gs.player_stats[train_player_id]
             evaluation_rewards.append(ps.reward)
 
