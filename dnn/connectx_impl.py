@@ -186,18 +186,15 @@ class ConnectX:
         return gs
 
     def reset(self):
-        #self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype, device=self.device)
         self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
-        self.games_multiple = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
 
         self.current_games = [self.create_new_game() for _ in range(self.num_games)]
         self.episode_lengths = np.zeros(self.num_games, dtype=np.int64)
 
-        return self.games_multiple
+        return self.games
 
     def current_states(self):
-        #return self.games
-        return self.games_multiple
+        return self.games
 
     def completed_games_stats(self, num_games):
         rewards = defaultdict(list)
@@ -229,7 +226,7 @@ class ConnectX:
 
             # this game has been updated and moved to the completed games by the previous player on the previous step
             if done and gs.player_stats[player_id].timesteps == 0:
-                game = self.games_multiple[game_id]
+                game = self.games[game_id]
                 raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, gs: {gs}: completed game with an empty player\n{game}')
 
             gs.update(player_id, reward, exploration)
@@ -252,7 +249,7 @@ class ConnectX:
 
                 for pid in self.player_ids:
                     if gs.player_stats[pid].timesteps == 0:
-                        game = self.games_multiple[game_id]
+                        game = self.games[game_id]
                         raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, other: {pid}, '
                                          f'gs: {gs}: trying to complete a game with an empty player\n'
                                          f'{game}')
@@ -262,70 +259,14 @@ class ConnectX:
 
         self.episode_lengths[reset_game_ids] = 0
         self.games[reset_game_ids, ...] = 0
-        self.games_multiple[reset_game_ids, ...] = 0
 
-    def step_multiple(self, player_id, actions):
+    def step(self, player_id, actions):
         actions = actions.to(self.games.device)
 
-        self.games_multiple, rewards, dones = step_games(self.games_multiple, player_id, actions, self.num_rows, self.num_columns, self.inarow)
-
-        self.total_steps += len(self.games)
-        return self.games_multiple, rewards, dones
-
-    def step_single(self, player, actions):
-        player = torch.FloatTensor([player])[0]
-        jobs = []
-        for cont_idx in range(0, len(self.games)):
-            game = self.games[cont_idx]
-            action = actions[cont_idx]
-
-            job = joblib.delayed(step_single_game)(game, player, action, self.num_rows, self.num_columns, self.inarow)
-            jobs.append(job)
-
-        with joblib.parallel_backend('threading', n_jobs=16):
-            results = joblib.Parallel(require='sharedmem')(jobs)
-
-            rewards = np.zeros(len(actions), dtype=np.float32)
-            dones = np.zeros(len(actions), dtype=np.float32)
-
-            for idx, res_tuple in enumerate(results):
-                game, reward, done = res_tuple
-
-                self.games[idx, ...] = game
-                rewards[idx] = reward
-                dones[idx] = done
+        self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
 
         self.total_steps += len(self.games)
         return self.games, rewards, dones
-
-    def step1(self, player_id, actions):
-        games_multiple, rewards_multiple, dones_multiple = self.step_multiple(player_id, actions)
-        games, rewards, dones = self.step_single(player_id, actions)
-
-        rewards_index = np.arange(len(games))[rewards != rewards_multiple]
-        dones_index = np.arange(len(games))[dones != dones_multiple]
-
-        games_index = games != games_multiple
-        games_index = torch.any(games_index, -1)
-        games_index = torch.any(games_index, -1)
-        games_index = torch.any(games_index, -1)
-        games_index = torch.arange(len(games))[games_index]
-
-        if len(rewards_index) > 0 or len(dones_index) > 0 or len(games_index) > 0:
-            print(f'rewards_index: {len(rewards_index)}: {rewards_index[:5]}')
-            print(f'dones_index: {len(dones_index)}: {dones_index[:5]}')
-            print(f'games_index: {len(games_index)}: {games_index[:5]}')
-
-            idx = games_index[0]
-
-            print(f'multiple:\n{games_multiple[idx, 0, :, :]}\nsingle:\n{games[idx, 0, :, :]}')
-            exit(-1)
-
-        return self.games_multiple, rewards_multiple, dones_multiple
-
-    def step(self, player_id, actions):
-        return self.step_multiple(player_id, actions)
-
 
     def close(self):
         pass
