@@ -122,44 +122,49 @@ class BaseTrainer:
             evaluation_rewards += episode_rewards
 
         last = evaluation_rewards[-self.num_evaluations_per_epoch:]
-        wins = np.count_nonzero(np.array(last) >= 1) / len(last) * 100
+        wins = int(np.count_nonzero(np.array(last) >= 1) / len(last) * 100)
         
         return wins, evaluation_rewards
 
     def evaluate_torch(self, train_agent):
         train_agent.set_training_mode(False)
-        evaluation_rewards = []
 
         train_player_id = 1
         eval_player_id = 2
 
         self.eval_env.reset()
 
-        while len(self.eval_env.completed_games) < self.num_evaluations_per_epoch:
+        while True:
             for player_id in [train_player_id, eval_player_id]:
                 states = self.eval_env.current_states()
+
+                game_index = self.eval_env.running_index()
 
                 if player_id == 2:
                     states = train_agent.make_opposite(states)
 
                 if player_id == train_player_id:
                     states = states.to(self.config.device)
-                    actions, _, _ = train_agent.actor.dist_actions(states)
+                    actions, log_probs, explorations = train_agent.actor.dist_actions(states)
                 else:
-                    actions = self.eval_agent.greedy_actions(states)
+                    actions, log_probs, explorations = self.eval_agent.dist_actions(states)
 
                 states, rewards, dones = self.eval_env.step(player_id, actions)
 
-                rewards = rewards.detach().clone().cpu().numpy()
-                dones = dones.detach().clone().cpu().numpy()
+                self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, explorations, torch.zeros_like(rewards))
 
-                self.eval_env.update_game_rewards(player_id, rewards, dones, np.zeros_like(dones))
+            completed_index = self.eval_env.completed_index()
+            if len(completed_index) >= self.num_evaluations_per_epoch:
+                break
 
-        for gs in self.eval_env.completed_games[:self.num_evaluations_per_epoch]:
-            ps = gs.player_stats[train_player_id]
-            evaluation_rewards.append(ps.reward)
+        completed_index = self.eval_env.completed_index()
+        episode_len = self.eval_env.episode_len[completed_index]
 
-        wins = np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100
+        player_idx = self.config.player_ids.index(train_player_id)
+
+        evaluation_rewards = self.eval_env.rewards[completed_index, episode_len-1, player_idx]
+
+        wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
 
         return wins, evaluation_rewards
 
@@ -175,11 +180,11 @@ class BaseTrainer:
             training_started = self.try_train()
 
         if training_started:
-            mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps = train_env.completed_games_stats(100)
+            mean_rewards, std_rewards, mean_explorations, std_explorations, mean_timesteps, std_timesteps = train_env.completed_games_stats(100)
             if len(mean_rewards) == 0:
                 return
 
-            last_game_stat = train_env.last_game_stats()
+            last_timesteps, last_rewards = train_env.last_game_stats()
 
             eval_metric, eval_rewards = self.evaluate(train_agent)
             self.evaluation_scores += eval_rewards
@@ -191,15 +196,14 @@ class BaseTrainer:
 
             wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
 
-            self.logger.info(f'{train_env.total_steps:6d}: '
-                             f'games: {len(train_env.completed_games):5d}, '
+            self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
-                             f'ts: {last_game_stat.player_stats[1].timesteps:2d}, '
-                             f'r: {last_game_stat.player_stats[1].reward:5.2f} / {last_game_stat.player_stats[2].reward:5.2f}, '
+                             f'ts: {last_timesteps:2d}, '
+                             f'r: {last_rewards[0]:5.2f} / {last_rewards[1]:5.2f}, '
                              f'last100: '
-                             f'ts: {mean_timesteps[1]:4.1f}\u00B1{std_timesteps[1]:3.1f} / {mean_timesteps[2]:4.1f}\u00B1{std_timesteps[2]:3.1f}, '
-                             f'r: {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f} / {mean_rewards[2]:5.2f}\u00B1{std_rewards[2]:4.2f}, '
-                             f'expl: {mean_expl[1]:.2f}\u00B1{std_expl[1]:.1f} / {mean_expl[2]:.2f}\u00B1{std_expl[2]:.1f}, '
+                             f'ts: {mean_timesteps:4.1f}\u00B1{std_timesteps:3.1f}, '
+                             f'r: {mean_rewards[0]:5.2f}\u00B1{std_rewards[0]:4.2f} / {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f}, '
+                             f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
                              f'r100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
                              f'mean: {mean_eval_score:6.3f}, '

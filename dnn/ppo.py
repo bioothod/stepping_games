@@ -103,134 +103,14 @@ class Actor(nn.Module):
         actions = torch.argmax(logits, 1)
         return actions
 
-class SingleEpisodeBuffer:
-    def __init__(self, config, critic):
-        self.critic = critic
-
-        self.device = config.device
-        self.gamma = config.gamma
-        self.tau = config.tau
-        self.max_episode_len = config.max_episode_len
-
-        self.states = []
-        self.actions = []
-        self.log_probs = []
-        self.returns = None
-        self.gaes = None
-
-        self.rewards = []
-        self.exploration = []
-
-    def __len__(self):
-        return len(self.rewards)
-
-    def add(self, state, action, log_prob, reward, expl):
-        self.states.append(state)
-        self.actions.append(action)
-        self.log_probs.append(log_prob)
-
-        self.rewards.append(reward)
-        self.exploration.append(expl)
-
-    def calculate_rewards(self, next_value):
-        episode_reward = sum(self.rewards)
-        episode_exploration = np.mean(self.exploration)
-
-        episode_len = len(self.rewards)
-
-        episode_rewards = np.array(self.rewards + [next_value], dtype=np.float32)
-        discounts = np.logspace(0, self.max_episode_len+1, num=self.max_episode_len+1, base=self.gamma, endpoint=False, dtype=np.float32)
-        discounts = discounts[:len(episode_rewards)]
-
-        episode_returns = []
-        for t in range(episode_len):
-            ret = np.sum(discounts[:len(discounts)-t] * episode_rewards[t:])
-            episode_returns.append(ret)
-        self.returns = np.array(episode_returns, dtype=np.float32)
-
-        self.states = np.array(self.states, dtype=np.float32)
-
-
-        with torch.no_grad():
-            states = torch.from_numpy(self.states).to(self.device)
-            state_values = self.critic(states).detach().cpu().numpy()
-            episode_values = np.concatenate([state_values, [next_value]])
-
-        episode_values = episode_values.flatten()
-
-        tau_discounts = np.logspace(0, self.max_episode_len+1, num=self.max_episode_len+1, base=self.gamma*self.tau, endpoint=False, dtype=np.float32)
-        tau_discounts = tau_discounts[:episode_len]
-        deltas = episode_rewards[:-1] + self.gamma * episode_values[1:] - episode_values[:-1]
-        gaes = []
-        for t in range(episode_len):
-            ret = np.sum(tau_discounts[:len(tau_discounts)-t] * deltas[t:])
-            gaes.append(ret)
-        self.gaes = np.array(gaes, dtype=np.float32)
-
-class EpisodeBuffers:
-    def __init__(self, config, critic):
-        self.critic = critic
-
-        self.config = config
-
-        self.reset()
-
-    def reset(self):
-        self.completed_games = []
-        self.completed_experiences = 0
-        self.current_games = {}
-
-        for player_id in self.config.player_ids:
-            self.current_games[player_id] = [SingleEpisodeBuffer(self.config, self.critic) for _ in range(self.config.train_num_games)]
-
-    def __len__(self):
-        return self.completed_experiences
-
-    def add(self, exp):
-        for game_id, game in enumerate(self.current_games[exp.player_id]):
-            state = exp.states[game_id]
-            action = exp.actions[game_id]
-            log_prob = exp.log_probs[game_id]
-            reward = exp.rewards[game_id]
-            done = exp.dones[game_id]
-            exploration = exp.explorations[game_id]
-            next_value = exp.next_values[game_id]
-
-            game.add(state, action, log_prob, reward, exploration)
-            if done:
-                game.calculate_rewards(next_value)
-                self.current_games[exp.player_id][game_id] = SingleEpisodeBuffer(self.config, self.critic)
-                self.completed_games.append(game)
-                self.completed_experiences += len(game)
-
-    def dump(self):
-        states = []
-        actions = []
-        log_probs = []
-        returns = []
-        gaes = []
-
-        for game in self.completed_games:
-            states.append(game.states)
-            actions.append(game.actions)
-            log_probs.append(game.log_probs)
-            returns.append(game.returns)
-            gaes.append(game.gaes)
-
-        states = torch.from_numpy(np.concatenate(states)).to(self.config.device)
-        actions = torch.from_numpy(np.concatenate(actions)).to(self.config.device)
-        log_probs = torch.from_numpy(np.concatenate(log_probs)).to(self.config.device)
-        returns = torch.from_numpy(np.concatenate(returns)).to(self.config.device)
-        gaes = torch.from_numpy(np.concatenate(gaes)).to(self.config.device)
-
-        return states, actions, log_probs, returns, gaes
-
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
+            'player_ids': [1, 2],
+
             'load_checkpoints_dir': 'checkpoints_simple3_ppo_8',
             'checkpoints_dir': 'checkpoints_simple3_ppo_8',
-            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_52.ckpt',
 
             'eval_after_train_steps': 20,
 
@@ -249,7 +129,6 @@ class PPO(train_selfplay.BaseTrainer):
             'gamma': 0.99,
             'tau': 0.97,
 
-            'train_num_games': 1024*2,
             'init_lr': 1e-5,
 
             'num_games_to_stop_training_state_model': 10_000_000,
@@ -259,12 +138,17 @@ class PPO(train_selfplay.BaseTrainer):
 
             'max_gradient_norm': 1.0,
 
-            'batch_size': 1024,
-            'max_batch_size': 1024*8,
+            'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
         })
-        super().__init__(self.config)
 
+        self.config.num_training_games = int(self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio / len(self.config.player_ids))
+        def align(x, alignment):
+            return int((x + alignment - 1) / alignment) * alignment
+
+        self.config.num_training_games = align(self.config.num_training_games, 512)
+
+        super().__init__(self.config)
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
@@ -282,12 +166,9 @@ class PPO(train_selfplay.BaseTrainer):
         self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
         self.logger.info(f'critic:\n{print_networks("critic", self.critic, verbose=True)}')
 
-        self.prev_experience = None
-        self.episode_buffers = EpisodeBuffers(self.config, self.critic)
-
         model_loaded = self.try_load(self.name, self)
 
-        self.train_env = connectx_impl.ConnectX(self.config, self.config.train_num_games)
+        self.train_env = connectx_impl.ConnectX(self.config, self.critic)
 
         self.max_eval_metric = 0.0
         if model_loaded:
@@ -432,26 +313,22 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.set_training_mode(True)
 
-        states, actions, log_probs, returns, gaes = self.episode_buffers.dump()
+        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump()
+
         self.logger.debug(f'dump: episode_buffers: '
-                         f'completed_games: {len(self.episode_buffers.completed_games)}, '
-                         f'experiences: {len(self.episode_buffers)}, '
+                         f'completed_games: {len(game_index)}, '
+                         f'experiences: {len(states)}, '
                          f'states: {states.shape}, '
                          f'actions: {actions.shape}, '
                          f'log_probs: {log_probs.shape}, '
+                         f'values: {values.shape}, '
                          f'returns: {returns.shape}, '
                          f'gaes: {gaes.shape}')
 
-        values = self.critic(states).detach()
         gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
 
         self.optimize_actor(states, actions, log_probs, gaes)
         self.optimize_critic(states, returns, values)
-
-        new_batch_size = self.config.batch_size + 1024
-        if new_batch_size <= self.config.max_batch_size:
-            self.logger.info(f'train: batch_size update: {self.config.batch_size} -> {new_batch_size}')
-            self.config.batch_size = new_batch_size
 
         return True
 
@@ -476,12 +353,6 @@ class PPO(train_selfplay.BaseTrainer):
         if player_id == 2:
             new_states = self.make_opposite(new_states)
 
-        dones = dones.detach().cpu().numpy()
-        rewards = rewards.detach().clone().cpu().numpy()
-
-        truncated_indexes = np.flatnonzero(np.logical_and(self.train_env.episode_lengths + 1 == self.config.max_episode_len, dones != 1))
-        dones[truncated_indexes] = 1
-
         return edict({
             'player_id': player_id,
             'states': states,
@@ -491,59 +362,38 @@ class PPO(train_selfplay.BaseTrainer):
             'dones': dones,
             'explorations': explorations,
             'new_states': new_states,
-            'truncated_indexes': truncated_indexes,
         })
 
     def make_single_step_and_save(self, player_id):
         states = self.train_env.current_states()
+        if len(states) == 0:
+            self.logger.info(f'player_id: {player_id}: states: {len(states)}')
+            return
+
+        game_index = self.train_env.running_index()
+        episode_len = self.train_env.episode_len[game_index]
 
         step = self.make_single_step(player_id, states)
 
-        next_values = np.zeros(len(step.states), dtype=np.float32)
-        if len(step.truncated_indexes) > 0:
+        truncated_indexes = np.flatnonzero(np.logical_and(episode_len + 1 == self.config.max_episode_len, step.dones != True))
+        step.dones[truncated_indexes] = 1
+
+        next_values = torch.zeros(len(step.states), dtype=torch.float32)
+        if len(truncated_indexes) > 0:
             with torch.no_grad():
                 next_truncated_states = step.new_states[truncated_indexes, ...]
                 next_truncated_states = next_truncated_states.to(self.config.device)
-                nv = self.critic(next_truncated_states).detach().cpu().numpy()
-                next_values[step.truncated_indexes] = nv
+                nv = self.critic(next_truncated_states).detach().cpu()
+                next_values[truncated_indexes] = nv
 
-        states = step.states.detach().clone().cpu().numpy()
-
-        actions = step.actions.detach().clone().cpu().numpy()
-        log_probs = step.log_probs.detach().clone().cpu().numpy()
-        explorations = step.explorations.detach().clone().cpu().numpy()
-
-        if self.prev_experience is not None:
-            self.prev_experience.dones[step.dones == 1] = 1
-
-            cur_win_index = step.rewards == 1
-            self.prev_experience.rewards[cur_win_index] = -1
-            self.prev_experience.dones[cur_win_index] = 1
-
-            #cur_lose_index = rewards < 0
-            #prev_rewards[cur_lose_index] = 1
-            #prev_dones[cur_lose_index] = 1
-
-            self.episode_buffers.add(self.prev_experience)
-
-        self.prev_experience = edict({
-            'player_id': player_id,
-            'states': states,
-            'actions': actions,
-            'log_probs': log_probs,
-            'rewards': step.rewards,
-            'dones': step.dones,
-            'explorations': explorations,
-            'next_values': next_values
-        })
-
-        self.train_env.update_game_rewards(player_id, step.rewards, step.dones, explorations)
+        self.train_env.update_game_rewards(player_id, game_index, step.states, step.actions, step.log_probs, step.rewards, step.dones, step.explorations, next_values)
 
     def make_step(self):
         self.make_single_step_and_save(1)
         self.make_single_step_and_save(2)
 
-        if len(self.train_env.completed_games) > self.config.num_games_to_stop_training_state_model:
+
+        if self.train_env.total_games_completed > self.config.num_games_to_stop_training_state_model:
             if self.actor.train_state_features:
                 self.logger.info(f'completed_games: {len(self.train_env.completed_games)}, '
                                  f'num_games_to_stop_training_state_model: {self.config.num_games_to_stop_training_state_model}: '
@@ -553,11 +403,17 @@ class PPO(train_selfplay.BaseTrainer):
 
     def fill_episode_buffer(self):
         self.train_env.reset()
-        self.episode_buffers.reset()
 
-        while len(self.episode_buffers) < self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio:
-            #self.logger.info(f'fill_episode_buffer: completed_games: {len(self.episode_buffers.completed_games)}, experiences: {len(self.episode_buffers)}, batch_size: {self.config.batch_size}')
+        while True:
             self.make_step()
+
+            completed_games, completed_states = self.train_env.completed_games_and_states()
+
+            requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
+            #self.logger.info(f'fill_episode_buffer: completed_games: {completed_games}, completed_states: {completed_states}, requested_size {requested_states_size}')
+
+            if completed_states >= requested_states_size:
+                break
 
 def main():
     ppo = PPO()
