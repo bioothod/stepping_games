@@ -102,6 +102,17 @@ class Actor(nn.Module):
 
         return state
 
+    def dist_actions(self, inputs):
+        state_features = self.state_features(inputs)
+        logits = self.features(state_features)
+        dist = torch.distributions.Categorical(logits=logits)
+        actions = dist.sample()
+
+        log_prob = dist.log_prob(actions)
+
+        is_exploratory = actions != torch.argmax(logits, axis=1)
+        return actions, log_prob, is_exploratory
+
     def greedy_actions(self, states):
         state_features = self.state_features(states)
         logits = self.features(state_features)
