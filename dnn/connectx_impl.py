@@ -97,7 +97,6 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
     #default_reward = 0.0
 
     rewards = torch.where(dones, 1.0, default_reward)
-    dones = dones.type(torch.float32)
 
     return rewards, dones
 
@@ -113,7 +112,10 @@ def step_single_game(game, player_id, action, num_rows, num_columns, inarow):
 
     return game, float(reward), float(done)
 
+@torch.jit.script
 def step_games(games, player_id, actions, num_rows, num_columns, inarow):
+    player_id = torch.tensor(player_id, dtype=torch.float32)
+
     num_games = len(games)
     non_zero = torch.count_nonzero(games[torch.arange(num_games, dtype=torch.int64), :, :, actions], 2).squeeze(1)
 
@@ -124,148 +126,221 @@ def step_games(games, player_id, actions, num_rows, num_columns, inarow):
     games[good_action_index_batch, :, num_rows - non_zero[good_action_index_batch] - 1, good_actions_index] = player_id
 
     rewards, dones = check_reward(games, player_id, num_rows, num_columns, inarow)
-    rewards = torch.where(invalid_action_index_batch, float(-10), rewards)
-    dones = torch.where(invalid_action_index_batch, float(1), dones)
+    rewards[invalid_action_index_batch] = torch.tensor(-10., dtype=torch.float32)
+    dones[invalid_action_index_batch] = True
 
     return games, rewards, dones
 
-class PlayerStat:
-    def __init__(self):
-        self.timesteps = 0
-        self.reward = 0.0
-        self.exploration_steps = 0
 
-    def update(self, reward, exploration_step):
-        self.timesteps += 1
-        self.reward += reward
-        self.exploration_steps += exploration_step
+@torch.jit.script
+def calculate_rewards(values, rewards, next_value, max_episode_len, gamma, tau):
+    episode_len = len(rewards)
 
-    def __str__(self):
-        return f'ts: {self.timesteps}, reward: {self.reward:.3f}, expl: {self.exploration_steps}'
+    next_value = next_value.unsqueeze(0)
+    episode_rewards = torch.cat([rewards, next_value])
+    discounts = torch.logspace(0, max_episode_len+1, steps=max_episode_len+1, base=gamma)
+    discounts = discounts[:len(episode_rewards)]
 
-class GameStat:
-    def __init__(self, game_id, player_ids):
-        self.game_id = game_id
+    episode_returns = []
+    for t in range(episode_len):
+        ret = torch.sum(discounts[:len(discounts)-t] * episode_rewards[t:])
+        episode_returns.append(ret)
 
-        self.player_stats = {player_id:PlayerStat() for player_id in player_ids}
+    episode_values = torch.cat([values, next_value], 0)
 
-    def update(self, player_id, reward, exploration):
-        self.player_stats[player_id].update(reward, exploration)
+    episode_values = episode_values.flatten()
 
-    def __str__(self):
-        msg = []
-        for player_id, ps in self.player_stats.items():
-            msg.append(f'{player_id}: {ps}')
-        msg = ', '.join(msg)
-        return msg
+    tau_discounts = torch.logspace(0, max_episode_len+1, steps=max_episode_len+1, base=gamma*tau)
+    tau_discounts = tau_discounts[:episode_len]
+    deltas = episode_rewards[:-1] + gamma * episode_values[1:] - episode_values[:-1]
+    gaes = []
+    for t in range(episode_len):
+        ret = torch.sum(tau_discounts[:len(tau_discounts)-t] * deltas[t:])
+        gaes.append(ret)
+
+    return episode_returns, gaes
+
 
 class ConnectX:
-    def __init__(self, config: EasyDict, num_games: int):
-        self.num_games = num_games
+    def __init__(self, config: EasyDict, critic):
+        self.num_games = config.num_training_games
         self.num_actions = config.columns
         self.num_columns = config.columns
         self.num_rows = config.rows
         self.inarow = config.inarow
         self.device = config.device
+        self.max_episode_len = config.max_episode_len
+        self.gamma = config.gamma
+        self.tau = config.tau
 
-        self.player_ids = [1, 2]
+        self.player_ids = config.player_ids
+
+        self.total_games_completed = 0
+
+        self.critic = critic
 
         self.observation_shape = (1, self.num_rows, self.num_actions)
         self.observation_dtype = torch.float32
 
-        self.total_steps = 0
-        self.completed_games = []
-        self.new_game_index = 0
+        self.last_completed_game_index = 0
         self.reset()
 
-    def create_new_game(self):
-        gs = GameStat(self.new_game_index, self.player_ids)
-        self.new_game_index += 1
-        return gs
-
     def reset(self):
-        #self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype, device=self.device)
-        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_actions), dtype=self.observation_dtype)
+        self.games = torch.zeros((self.num_games,) + self.observation_shape, dtype=self.observation_dtype)
 
-        self.current_games = [self.create_new_game() for _ in range(self.num_games)]
-        self.episode_lengths = np.zeros(self.num_games, dtype=np.int64)
-
-        return self.games
+        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids), 3, self.num_rows, self.num_actions), dtype=torch.float32)
+        self.rewards = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.float32)
+        self.actions = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids))).long()
+        self.log_probs = torch.zeros_like(self.rewards)
+        self.explorations = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.bool)
+        self.next_values = torch.zeros_like(self.rewards)
+        self.dones = torch.zeros(self.num_games, dtype=torch.bool)
+        self.episode_len = torch.zeros(self.num_games).long()
 
     def current_states(self):
-        return self.games
+        game_index = self.running_index()
+        games = self.games[game_index]
+
+        return games
 
     def completed_games_stats(self, num_games):
-        rewards = defaultdict(list)
-        expl = defaultdict(list)
-        time_steps = defaultdict(list)
+        game_index = self.completed_index()[:num_games]
 
-        for gs in self.completed_games[-num_games:]:
-            for player_id, player_stats in gs.player_stats.items():
-                rewards[player_id].append(player_stats.reward)
-                expl[player_id].append(player_stats.exploration_steps / player_stats.timesteps)
-                time_steps[player_id].append(player_stats.timesteps)
+        rewards = []
+        explorations = []
+        for game_id in game_index:
+            episode_len = self.episode_len[game_id]
 
-        mean_rewards = {player_id:np.mean(rew) for player_id, rew in rewards.items()}
-        std_rewards = {player_id:np.std(rew) for player_id, rew in rewards.items()}
-        mean_expl = {player_id:np.mean(ex) for player_id, ex in expl.items()}
-        std_expl = {player_id:np.std(ex) for player_id, ex in expl.items()}
-        mean_timesteps = {player_id:np.mean(ts) for player_id, ts in time_steps.items()}
-        std_timesteps = {player_id:np.std(ts) for player_id, ts in time_steps.items()}
+            reward = self.rewards[game_id, :episode_len, :].sum(0)
+            rewards.append(reward)
 
-        return mean_rewards, std_rewards, mean_expl, std_expl, mean_timesteps, std_timesteps
+            exploration = self.explorations[game_id, :episode_len, :].float().sum(0) / float(episode_len)
+            explorations.append(exploration)
+
+        rewards = torch.stack(rewards, 0)
+        explorations = torch.stack(explorations, 0)
+
+
+        std_rewards, mean_rewards = torch.std_mean(rewards, 0)
+        std_explorations, mean_explorations = torch.std_mean(explorations, 0)
+        std_timesteps, mean_timesteps = torch.std_mean(self.episode_len[game_index].float())
+
+        mean_rewards = mean_rewards.cpu().numpy()
+        std_rewards = std_rewards.cpu().numpy()
+        mean_explorations = mean_explorations.cpu().numpy()
+        std_explorations = std_explorations.cpu().numpy()
+
+        return mean_rewards, std_rewards, mean_explorations, std_explorations, float(mean_timesteps), float(std_timesteps)
 
     def last_game_stats(self):
-        return self.completed_games[-1]
-    
-    def update_game_rewards(self, player_id, rewards, dones, explorations):
-        reset_game_ids = []
-        for game_id, (reward, done, exploration) in enumerate(zip(rewards, dones, explorations)):
-            gs = self.current_games[game_id]
+        game_index = self.completed_index()[-1]
+        episode_len = self.episode_len[game_index]
 
-            # this game has been updated and moved to the completed games by the previous player on the previous step
-            if done and gs.player_stats[player_id].timesteps == 0:
-                game = self.games[game_id]
-                raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, gs: {gs}: completed game with an empty player\n{game}')
+        rewards = torch.sum(self.rewards[game_index, :episode_len, :], 0).cpu().numpy()
+        return int(episode_len), rewards
 
-            gs.update(player_id, reward, exploration)
+    def running_index(self):
+        index = torch.arange(len(self.games))
+        return index[torch.logical_not(self.dones)]
 
-            self.episode_lengths[game_id] += 1
+    def completed_index(self):
+        index = torch.arange(len(self.games))
+        completed_index = index[self.dones]
+        return completed_index
 
-            if done:
-                reset_game_ids.append(game_id)
+    def completed_games_and_states(self):
+        completed_index = self.completed_index()
 
-                for other_player_id in self.player_ids:
-                    if other_player_id != player_id:
-                        other_reward = None
-                        if reward == 1:
-                            other_reward = -1
-                        #elif reward == -1:
-                        #    other_reward = 1
+        episode_len = self.episode_len[completed_index]
+        total_states = torch.sum(episode_len) * len(self.player_ids)
+        return len(completed_index), int(total_states)
 
-                        if other_reward:
-                            gs.update(other_player_id, other_reward, exploration)
+    def update_game_rewards(self, player_id, game_index, states, actions, log_probs, rewards, dones, explorations, next_values):
+        player_index = self.player_ids.index(player_id)
+        episode_index = self.episode_len[game_index]
 
-                for pid in self.player_ids:
-                    if gs.player_stats[pid].timesteps == 0:
-                        game = self.games[game_id]
-                        raise ValueError(f'game_id: {game_id}, done: {done}, reward: {reward:.3f}, player_id: {player_id}, other: {pid}, '
-                                         f'gs: {gs}: trying to complete a game with an empty player\n'
-                                         f'{game}')
+        self.states[game_index, episode_index, player_index] = states.detach().clone().to(self.states.device)
+        self.rewards[game_index, episode_index, player_index] = rewards.detach().clone().to(self.states.device)
+        self.actions[game_index, episode_index, player_index] = actions.detach().clone().to(self.states.device)
+        self.log_probs[game_index, episode_index, player_index] = log_probs.detach().clone().to(self.states.device)
+        self.explorations[game_index, episode_index, player_index] = explorations.detach().clone().to(self.states.device)
+        self.next_values[game_index, episode_index, player_index] = next_values.detach().clone().to(self.states.device)
+        self.dones[game_index] = dones.detach().clone().to(self.states.device)
 
-                self.completed_games.append(gs)
-                self.current_games[game_id] = self.create_new_game()
+        cur_win_index = rewards == 1
+        cur_win_game_index = game_index[cur_win_index]
+        cur_win_episode_index = episode_index[cur_win_index]
+        for other_player_index, other_player_id in enumerate(self.player_ids):
+            if other_player_id == player_id:
+                continue
 
-        self.episode_lengths[reset_game_ids] = 0
-        self.games[reset_game_ids, ...] = 0
+            self.rewards[cur_win_game_index, cur_win_episode_index-1, other_player_index] = -1
+
+        self.episode_len[game_index] += 1
+
+        self.total_games_completed += int(dones.sum().cpu().numpy())
+
+    def dump(self):
+        game_index = self.completed_index()
+
+        ret_states = []
+        ret_actions = []
+        ret_log_probs = []
+        ret_gaes = []
+        ret_returns = []
+
+        for game_id in game_index:
+            episode_len = self.episode_len[game_id]
+
+            for player_idx in range(len(self.player_ids)):
+                states = self.states[game_id, :episode_len, player_idx, ...]
+                ret_states.append(states)
+        ret_states = torch.cat(ret_states, 0).to(self.device)
+
+        with torch.no_grad():
+            ret_values = self.critic(ret_states).detach()
+            ret_values_cpu = ret_values.cpu()
+
+        values_index_start = 0
+        for game_id in game_index:
+            episode_len = self.episode_len[game_id]
+
+            for player_idx in range(len(self.player_ids)):
+                actions = self.actions[game_id, :episode_len, player_idx]
+                log_probs = self.log_probs[game_id, :episode_len, player_idx]
+                rewards = self.rewards[game_id, :episode_len, player_idx]
+                next_values = self.next_values[game_id, episode_len-1, player_idx]
+
+                values = ret_values_cpu[values_index_start : values_index_start + episode_len]
+                values_index_start += episode_len
+
+                returns, gaes = calculate_rewards(values, rewards, next_values, self.max_episode_len, self.gamma, self.tau)
+
+                returns = torch.tensor(returns).float()
+                gaes = torch.tensor(gaes).float()
+
+                ret_actions.append(actions)
+                ret_log_probs.append(log_probs)
+                ret_gaes.append(gaes)
+                ret_returns.append(returns)
+
+        ret_actions = torch.cat(ret_actions, 0).to(self.device)
+        ret_log_probs = torch.cat(ret_log_probs, 0).to(self.device)
+        ret_gaes = torch.cat(ret_gaes, 0).to(self.device)
+        ret_returns = torch.cat(ret_returns, 0).to(self.device)
+
+        return game_index, ret_states, ret_actions, ret_log_probs, ret_gaes, ret_values, ret_returns
 
     def step(self, player_id, actions):
         actions = actions.to(self.games.device)
+        game_index = self.running_index()
+        games = self.games[game_index]
 
-        self.games, rewards, dones = step_games(self.games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
+        games, rewards, dones = step_games(games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
+        self.games[game_index] = games.detach().clone()
+        #print(f'{self.games[0].detach().cpu().numpy().astype(int).reshape(self.num_rows, self.num_columns)}')
 
-        self.total_steps += len(self.games)
-        return self.games, rewards, dones
+        return games, rewards, dones
 
     def close(self):
         pass
