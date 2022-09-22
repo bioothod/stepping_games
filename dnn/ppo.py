@@ -260,7 +260,7 @@ class PPO(train_selfplay.BaseTrainer):
         mean_entropy_loss = np.mean(entropy_losses)
         mean_total_loss = np.mean(total_losses)
         mean_kl = np.mean(kls)
-        self.logger.info(f'optimize_actor: '
+        self.logger.debug(f'optimize_actor: '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
                          f'experiences: {len(states)}, '
                          f'total_loss: {mean_total_loss:.4f}, '
@@ -309,7 +309,7 @@ class PPO(train_selfplay.BaseTrainer):
         mean_value_loss = np.mean(value_losses)
         mean_mse_values = np.mean(mse_values)
         mean_mse_returns = np.mean(mse_returns)
-        self.logger.info(f'optimize_critic: '
+        self.logger.debug(f'optimize_critic: '
                          f'iterations: {len(value_losses)}/{self.config.value_optimization_steps}, '
                          f'experiences: {len(states)}, '
                          f'mean: '
