@@ -4,14 +4,17 @@ import torch
 
 from model import Actor, default_config
 
-default_config['checkpoint_path'] = '/kaggle_simulations/agent/submission.ckpt'
+want_test = os.environ.get('RUN_KAGGLE_TEST')
+if want_test:
+    default_config['checkpoint_path'] = 'submission.ckpt'
+else:
+    default_config['checkpoint_path'] = '/kaggle_simulations/agent/submission.ckpt'
 
 actor = Actor(default_config)
 checkpoint = torch.load(default_config['checkpoint_path'], map_location='cpu')
 actor.load_state_dict(checkpoint['actor_state_dict'])
 actor.train(False)
 
-want_test = os.environ.get('RUN_KAGGLE_TEST')
 if want_test:
     import kaggle_environments as kaggle
     env = kaggle.make('connectx')
