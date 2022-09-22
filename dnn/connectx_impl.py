@@ -172,6 +172,7 @@ class ConnectX:
         self.max_episode_len = config.max_episode_len
         self.gamma = config.gamma
         self.tau = config.tau
+        self.batch_size = config.batch_size
 
         self.player_ids = config.player_ids
 
@@ -179,15 +180,14 @@ class ConnectX:
 
         self.critic = critic
 
-        self.observation_shape = (3, self.num_rows, self.num_actions)
         self.observation_dtype = torch.float32
 
         self.reset()
 
     def reset(self):
-        self.games = torch.zeros((self.num_games,) + self.observation_shape, dtype=self.observation_dtype, device='cpu')
+        self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_columns), dtype=self.observation_dtype, device='cpu')
 
-        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)) + self.observation_shape, dtype=torch.float32, device='cpu')
+        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids), 3, self.num_rows, self.num_columns), dtype=torch.float32, device='cpu')
         self.rewards = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.float32, device='cpu')
         self.actions = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), device='cpu').long()
         self.log_probs = torch.zeros_like(self.rewards, device='cpu')
@@ -195,6 +195,19 @@ class ConnectX:
         self.next_values = torch.zeros_like(self.rewards, device='cpu')
         self.dones = torch.zeros(self.num_games, dtype=torch.bool, device='cpu')
         self.episode_len = torch.zeros(self.num_games, device='cpu').long()
+
+    def make_state(self, player_id, game_states):
+        num_games = len(game_states)
+
+        states = torch.zeros((1 + len(self.player_ids), num_games, self.num_rows, self.num_columns), dtype=torch.float32)
+        states[0, ...] = player_id
+
+        for idx, pid in enumerate(self.player_ids):
+            player_idx = game_states[:, 0, ...] == pid
+            states[idx + 1, player_idx] = 1
+
+        states = states.transpose(1, 0)
+        return states
 
     def current_states(self):
         game_index = self.running_index()
@@ -298,9 +311,17 @@ class ConnectX:
                 ret_states.append(states)
         ret_states = torch.cat(ret_states, 0).to(self.device)
 
+        ret_values = []
         with torch.no_grad():
-            ret_values = self.critic(ret_states).detach()
-            ret_values_cpu = ret_values.cpu()
+            start_index = 0
+            while start_index < len(ret_states):
+                batch = ret_states[start_index : start_index + self.batch_size, ...]
+                values = self.critic(batch).detach()
+                ret_values.append(values)
+                start_index += len(batch)
+
+        ret_values = torch.cat(ret_values)
+        ret_values_cpu = ret_values.cpu()
 
         values_index_start = 0
         for game_id in game_index:

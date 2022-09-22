@@ -136,9 +136,7 @@ class BaseTrainer:
         while True:
             for player_id in [train_player_id, eval_player_id]:
                 game_index, states = self.eval_env.current_states()
-
-                if player_id == 2:
-                    states = train_agent.make_opposite(states)
+                states = self.eval_env.make_state(player_id, states)
 
                 if player_id == train_player_id:
                     states = states.to(self.config.device)
