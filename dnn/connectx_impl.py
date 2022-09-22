@@ -174,6 +174,7 @@ class ConnectX:
         self.max_episode_len = config.max_episode_len
         self.gamma = config.gamma
         self.tau = config.tau
+        self.batch_size = config.batch_size
 
         self.player_ids = config.player_ids
 
@@ -300,9 +301,17 @@ class ConnectX:
                 ret_states.append(states)
         ret_states = torch.cat(ret_states, 0).to(self.device)
 
+        ret_values = []
         with torch.no_grad():
-            ret_values = self.critic(ret_states).detach()
-            ret_values_cpu = ret_values.cpu()
+            start_index = 0
+            while start_index < len(ret_states):
+                batch = ret_states[start_index : start_index + self.batch_size, ...]
+                values = self.critic(batch).detach()
+                ret_values.append(values)
+                start_index += len(batch)
+
+        ret_values = torch.cat(ret_values)
+        ret_values_cpu = ret_values.cpu()
 
         values_index_start = 0
         for game_id in game_index:

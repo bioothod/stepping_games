@@ -250,7 +250,17 @@ class PPO(train_selfplay.BaseTrainer):
             total_losses.append(loss.item())
 
             with torch.no_grad():
-                pred_log_probs_all, _ = self.actor.get_predictions(states, actions)
+                start_index = 0
+                pred_log_probs_all = []
+                while start_index < len(states):
+                    batch_states = states[start_index : start_index + self.config.batch_size, ...]
+                    batch_actions = actions[start_index : start_index + self.config.batch_size]
+                    pred_log_probs, _ = self.actor.get_predictions(batch_states, batch_actions)
+                    pred_log_probs_all.append(pred_log_probs)
+                    start_index += len(batch_states)
+
+                pred_log_probs_all = torch.cat(pred_log_probs_all)
+
                 kl = (log_probs - pred_log_probs_all).mean()
                 kls.append(kl.item())
                 if kl.item() > self.config.policy_stopping_kl:
@@ -296,7 +306,16 @@ class PPO(train_selfplay.BaseTrainer):
 
             value_losses.append(value_loss.item())
             with torch.no_grad():
-                pred_values_all = self.critic(states)
+                pred_values_all = []
+                start_index = 0
+                while start_index < len(states):
+                    batch_states = states[start_index : start_index + self.config.batch_size, ...]
+                    pred_values = self.critic(batch_states)
+                    pred_values_all.append(pred_values)
+                    start_index += len(batch_states)
+
+                pred_values_all = torch.cat(pred_values_all)
+
                 mse_val = (values - pred_values_all).pow(2).mul(0.5).mean()
                 mse_ret = (returns - pred_values_all).pow(2).mul(0.5).mean()
 
