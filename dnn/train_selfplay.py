@@ -12,9 +12,7 @@ torch.backends.cuda.matmul.allow_tf32 = True
 
 import action_strategies
 import connectx_impl
-import gym_env
 import logger
-from multiprocess_env import MultiprocessEnv
 import networks
 
 class BaseTrainer:
@@ -54,6 +52,9 @@ class BaseTrainer:
         self.max_eval_metric = 0.0
 
         if not config.get('eval_checkpoint_path'):
+            import gym_env
+            from multiprocess_env import MultiprocessEnv
+
             self.eval_agent_name = 'negamax'
 
             make_args_fn = lambda: {}
