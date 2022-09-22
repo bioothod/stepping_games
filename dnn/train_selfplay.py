@@ -135,9 +135,7 @@ class BaseTrainer:
 
         while True:
             for player_id in [train_player_id, eval_player_id]:
-                states = self.eval_env.current_states()
-
-                game_index = self.eval_env.running_index()
+                game_index, states = self.eval_env.current_states()
 
                 if player_id == 2:
                     states = train_agent.make_opposite(states)
@@ -148,7 +146,7 @@ class BaseTrainer:
                 else:
                     actions, log_probs, explorations = self.eval_agent.dist_actions(states)
 
-                states, rewards, dones = self.eval_env.step(player_id, actions)
+                states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
                 self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, explorations, torch.zeros_like(rewards))
 
@@ -157,11 +155,14 @@ class BaseTrainer:
                 break
 
         completed_index = self.eval_env.completed_index()
-        episode_len = self.eval_env.episode_len[completed_index]
 
         player_idx = self.config.player_ids.index(train_player_id)
 
-        evaluation_rewards = self.eval_env.rewards[completed_index, episode_len-1, player_idx]
+        evaluation_rewards = []
+        for game_id in completed_index:
+            episode_len = self.eval_env.episode_len[game_id]
+            reward = self.eval_env.rewards[game_id, :episode_len, player_idx].sum()
+            evaluation_rewards.append(reward)
 
         wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
 
@@ -179,7 +180,7 @@ class BaseTrainer:
             training_started = self.try_train()
 
         if training_started:
-            mean_rewards, std_rewards, mean_explorations, std_explorations, mean_timesteps, std_timesteps = train_env.completed_games_stats(100)
+            mean_rewards, std_rewards, mean_explorations, std_explorations, mean_timesteps, std_timesteps = train_env.completed_games_stats()
             if len(mean_rewards) == 0:
                 return
 
@@ -188,8 +189,8 @@ class BaseTrainer:
             eval_metric, eval_rewards = self.evaluate(train_agent)
             self.evaluation_scores += eval_rewards
 
-            mean_100_eval_score = np.mean(self.evaluation_scores[-100:])
-            std_100_eval_score = np.std(self.evaluation_scores[-100:])
+            mean_eval_score = np.mean(self.evaluation_scores)
+            std_eval_score = np.std(self.evaluation_scores)
 
             mean_eval_score = np.mean(self.evaluation_scores)
 
@@ -199,12 +200,12 @@ class BaseTrainer:
                              f'last: '
                              f'ts: {last_timesteps:2d}, '
                              f'r: {last_rewards[0]:5.2f} / {last_rewards[1]:5.2f}, '
-                             f'last100: '
+                             f'last: '
                              f'ts: {mean_timesteps:4.1f}\u00B1{std_timesteps:3.1f}, '
                              f'r: {mean_rewards[0]:5.2f}\u00B1{std_rewards[0]:4.2f} / {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f}, '
                              f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
-                             f'r100: {mean_100_eval_score:5.2f}\u00B1{std_100_eval_score:4.2f}, '
+                             f'r: {mean_eval_score:5.2f}\u00B1{std_eval_score:4.2f}, '
                              f'mean: {mean_eval_score:6.3f}, '
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )

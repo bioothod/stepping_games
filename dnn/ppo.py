@@ -118,13 +118,13 @@ class PPO(train_selfplay.BaseTrainer):
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
-            'policy_stopping_kl': 0.02,
+            'policy_stopping_kl': 0.6,
 
             'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
-            'value_stopping_mse': 0.01,
+            'value_stopping_mse': 0.7,
 
-            'entropy_loss_weight': 0.1,
+            'entropy_loss_weight': 0.2,
 
             'gamma': 0.99,
             'tau': 0.97,
@@ -138,15 +138,17 @@ class PPO(train_selfplay.BaseTrainer):
 
             'max_gradient_norm': 1.0,
 
+            'num_training_games': 1024*2,
+
             'batch_size': 1024*8,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
-        self.config.num_training_games = int(self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio / len(self.config.player_ids))
+        #self.config.num_training_games = int(self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio / len(self.config.player_ids))
         def align(x, alignment):
             return int((x + alignment - 1) / alignment) * alignment
 
-        self.config.num_training_games = align(self.config.num_training_games, 512)
+        #self.config.num_training_games = align(self.config.num_training_games, 512)
 
         super().__init__(self.config)
         self.name = 'ppo'
@@ -222,7 +224,7 @@ class PPO(train_selfplay.BaseTrainer):
         total_losses = []
         kls = []
         for _ in range(self.config.policy_optimization_steps):
-            batch_indexes = np.random.choice(num_samples, self.config.batch_size, replace=False)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
 
             states_batch = states[batch_indexes]
             actions_batch = actions[batch_indexes]
@@ -258,9 +260,9 @@ class PPO(train_selfplay.BaseTrainer):
         mean_entropy_loss = np.mean(entropy_losses)
         mean_total_loss = np.mean(total_losses)
         mean_kl = np.mean(kls)
-        self.logger.debug(f'optimize_actor: '
-                         f'experiences: {len(actions)}, '
+        self.logger.info(f'optimize_actor: '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
+                         f'experiences: {len(states)}, '
                          f'total_loss: {mean_total_loss:.4f}, '
                          f'policy_loss: {mean_policy_loss:.4f}, '
                          f'entropy_loss: {mean_entropy_loss:.4f}, '
@@ -271,19 +273,20 @@ class PPO(train_selfplay.BaseTrainer):
         num_samples = len(states)
 
         value_losses = []
-        mses = []
+        mse_values = []
+        mse_returns = []
         for _ in range(self.config.value_optimization_steps):
-            batch_indexes = np.random.choice(num_samples, self.config.batch_size, replace=False)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
 
-            states_batch = states[batch_indexes]
-            returns_batch = returns[batch_indexes]
-            values_batch = values[batch_indexes]
+            states_sampled = states[batch_indexes]
+            returns_sampled = returns[batch_indexes]
+            values_sampled = values[batch_indexes]
 
-            pred_values = self.critic(states_batch)
-            pred_values_clipped = values_batch + (pred_values - values_batch).clamp(-self.config.value_clip_range, self.config.value_clip_range)
+            pred_values = self.critic(states_sampled)
+            pred_values_clipped = values_sampled + (pred_values - values_sampled).clamp(-self.config.value_clip_range, self.config.value_clip_range)
 
-            v_loss = (returns_batch - pred_values).pow(2)
-            v_loss_clipped = (returns_batch - pred_values_clipped).pow(2)
+            v_loss = (returns_sampled - pred_values).pow(2)
+            v_loss_clipped = (returns_sampled - pred_values_clipped).pow(2)
             value_loss = torch.max(v_loss, v_loss_clipped).mul(0.5).mean()
 
             self.critic_opt.zero_grad()
@@ -294,18 +297,25 @@ class PPO(train_selfplay.BaseTrainer):
             value_losses.append(value_loss.item())
             with torch.no_grad():
                 pred_values_all = self.critic(states)
-                mse = (values - pred_values_all).pow(2).mul(0.5).mean()
-                mses.append(mse.item())
+                mse_val = (values - pred_values_all).pow(2).mul(0.5).mean()
+                mse_ret = (returns - pred_values_all).pow(2).mul(0.5).mean()
 
-                if mse.item() > self.config.value_stopping_mse:
+                mse_values.append(mse_val.item())
+                mse_returns.append(mse_ret.item())
+
+                if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
                     break
 
         mean_value_loss = np.mean(value_losses)
-        mean_mse = np.mean(mses)
-        self.logger.debug(f'optimize_critic: '
+        mean_mse_values = np.mean(mse_values)
+        mean_mse_returns = np.mean(mse_returns)
+        self.logger.info(f'optimize_critic: '
                          f'iterations: {len(value_losses)}/{self.config.value_optimization_steps}, '
+                         f'experiences: {len(states)}, '
+                         f'mean: '
                          f'value_loss: {mean_value_loss:.4f}, '
-                         f'mse: {mean_mse:.3f}, '
+                         f'mse_values: {mean_mse_values:.3e}, '
+                         f'mse_returns: {mean_mse_returns:.4f}, '
                          f'stopping_mse: {self.config.value_stopping_mse}')
 
     def try_train(self):
@@ -352,7 +362,7 @@ class PPO(train_selfplay.BaseTrainer):
         with torch.no_grad():
             actions, log_probs, explorations = self.actor.dist_actions(states)
 
-        new_states, rewards, dones = self.train_env.step(player_id, actions)
+        new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
         new_states = self.make_state(player_id, new_states)
 
         return edict({
@@ -367,17 +377,16 @@ class PPO(train_selfplay.BaseTrainer):
         })
 
     def make_single_step_and_save(self, player_id):
-        states = self.train_env.current_states()
+        game_index, states = self.train_env.current_states()
         if len(states) == 0:
-            self.logger.info(f'player_id: {player_id}: states: {len(states)}')
+            #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
-        game_index = self.train_env.running_index()
         episode_len = self.train_env.episode_len[game_index]
 
-        step = self.make_single_step(player_id, states)
+        step = self.make_single_step(player_id, game_index, states)
 
-        truncated_indexes = np.flatnonzero(np.logical_and(episode_len + 1 == self.config.max_episode_len, step.dones != True))
+        truncated_indexes = torch.logical_and(episode_len + 1 == self.config.max_episode_len, step.dones != True)
         step.dones[truncated_indexes] = 1
 
         next_values = torch.zeros(len(step.states), dtype=torch.float32)
@@ -406,16 +415,21 @@ class PPO(train_selfplay.BaseTrainer):
     def fill_episode_buffer(self):
         self.train_env.reset()
 
-        while True:
+        while len(self.train_env.running_index()) > 0:
             self.make_step()
 
             completed_games, completed_states = self.train_env.completed_games_and_states()
 
             requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
-            #self.logger.info(f'fill_episode_buffer: completed_games: {completed_games}, completed_states: {completed_states}, requested_size {requested_states_size}')
+            self.logger.debug(f'fill_episode_buffer: '
+                             f'running_games: {len(self.train_env.running_index())}, '
+                             f'completed_games: {completed_games}, '
+                             f'completed_states: {completed_states}, '
+                             f'requested_size {requested_states_size}')
 
-            if completed_states >= requested_states_size:
+            if False and completed_states >= requested_states_size:
                 break
+
 
 def main():
     ppo = PPO()

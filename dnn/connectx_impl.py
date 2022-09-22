@@ -179,32 +179,42 @@ class ConnectX:
 
         self.critic = critic
 
-        self.observation_shape = (1, self.num_rows, self.num_actions)
+        self.observation_shape = (3, self.num_rows, self.num_actions)
         self.observation_dtype = torch.float32
 
-        self.last_completed_game_index = 0
         self.reset()
 
     def reset(self):
-        self.games = torch.zeros((self.num_games,) + self.observation_shape, dtype=self.observation_dtype)
+        self.games = torch.zeros((self.num_games,) + self.observation_shape, dtype=self.observation_dtype, device='cpu')
 
-        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids), 3, self.num_rows, self.num_actions), dtype=torch.float32)
-        self.rewards = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.float32)
-        self.actions = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids))).long()
-        self.log_probs = torch.zeros_like(self.rewards)
-        self.explorations = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.bool)
-        self.next_values = torch.zeros_like(self.rewards)
-        self.dones = torch.zeros(self.num_games, dtype=torch.bool)
-        self.episode_len = torch.zeros(self.num_games).long()
+        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)) + self.observation_shape, dtype=torch.float32, device='cpu')
+        self.rewards = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.float32, device='cpu')
+        self.actions = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), device='cpu').long()
+        self.log_probs = torch.zeros_like(self.rewards, device='cpu')
+        self.explorations = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.bool, device='cpu')
+        self.next_values = torch.zeros_like(self.rewards, device='cpu')
+        self.dones = torch.zeros(self.num_games, dtype=torch.bool, device='cpu')
+        self.episode_len = torch.zeros(self.num_games, device='cpu').long()
 
     def current_states(self):
         game_index = self.running_index()
         games = self.games[game_index]
 
-        return games
+        return game_index, games
 
-    def completed_games_stats(self, num_games):
-        game_index = self.completed_index()[:num_games]
+    def running_index(self):
+        index = torch.arange(len(self.games))
+        return index[torch.logical_not(self.dones)]
+
+    def completed_index(self):
+        index = torch.arange(len(self.games))
+        completed_index = index[self.dones]
+        return completed_index
+
+    def completed_games_stats(self, num_games=None):
+        game_index = self.completed_index()
+        if num_games:
+            game_index = game_index[:num_games]
 
         rewards = []
         explorations = []
@@ -238,15 +248,6 @@ class ConnectX:
 
         rewards = torch.sum(self.rewards[game_index, :episode_len, :], 0).cpu().numpy()
         return int(episode_len), rewards
-
-    def running_index(self):
-        index = torch.arange(len(self.games))
-        return index[torch.logical_not(self.dones)]
-
-    def completed_index(self):
-        index = torch.arange(len(self.games))
-        completed_index = index[self.dones]
-        return completed_index
 
     def completed_games_and_states(self):
         completed_index = self.completed_index()
@@ -331,9 +332,9 @@ class ConnectX:
 
         return game_index, ret_states, ret_actions, ret_log_probs, ret_gaes, ret_values, ret_returns
 
-    def step(self, player_id, actions):
+    def step(self, player_id, game_index, actions):
         actions = actions.to(self.games.device)
-        game_index = self.running_index()
+
         games = self.games[game_index]
 
         games, rewards, dones = step_games(games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
