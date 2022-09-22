@@ -15,11 +15,7 @@ class Model(nn.Module):
         num_input_linear_features = num_output_conv_features * (rows - 3) * columns
 
         self.conv_encoder = nn.Sequential(
-            nn.Conv2d(1, 2, 1),
-            nn.ReLU(inplace=True),
-            nn.BatchNorm2d(2),
-
-            nn.Conv2d(2, 16, 3, padding='same', padding_mode='zeros'),
+            nn.Conv2d(3, 16, 3, padding='same', padding_mode='zeros'),
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(16),
 
@@ -70,11 +66,12 @@ class Actor(nn.Module):
 
         num_features = config['num_features']
         num_actions = config['num_actions']
-        rows = config['rows']
-        columns = config['columns']
+        self.rows = config['rows']
+        self.columns = config['columns']
+        self.player_ids = config['player_ids']
 
         self.observation_dtype = np.float32
-        self.observation_shape = [1, rows, columns]
+        self.observation_shape = [self.rows, self.columns]
 
         hidden_dims = [num_features] + config['hidden_dims'] + [num_actions]
         modules = []
@@ -95,10 +92,14 @@ class Actor(nn.Module):
 
     def create_state(self, obs):
         orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
-        state = orig_state.copy()
-        if obs['mark'] == 2:
-            state[orig_state == 2] = 1
-            state[orig_state == 1] = 2
+        player_id = obs['mark']
+
+        state = torch.zeros((1 + len(self.player_ids), self.rows, self.columns), dtype=torch.float32)
+        state[0, ...] = player_id
+
+        for idx, pid in enumerate(self.player_ids):
+            player_idx = orig_state == pid
+            state[idx + 1, player_idx] = 1
 
         return state
 
@@ -122,7 +123,6 @@ class Actor(nn.Module):
 
     def forward(self, observation):
         state = self.create_state(observation)
-        state = torch.from_numpy(state)
 
         states = state.unsqueeze(0)
         actions = self.greedy_actions(states)
@@ -130,7 +130,7 @@ class Actor(nn.Module):
         action = actions.squeeze(0).detach().cpu().numpy()
         return int(action)
 
-defalut_config = {
+default_config = {
     'checkpoint_path': 'submission.ckpt',
     'rows': 6,
     'columns': 7,
@@ -138,4 +138,5 @@ defalut_config = {
     'num_actions': 7,
     'num_features': 512,
     'hidden_dims': [128],
+    'player_ids': [1, 2],
 }
