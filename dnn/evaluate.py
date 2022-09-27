@@ -6,7 +6,7 @@ from copy import deepcopy
 import numpy as np
 import torch
 
-import mcts
+#import mcts
 
 def create_submission_agent(checkpoint_path):
     from submission.model import Actor as eval_agent_model

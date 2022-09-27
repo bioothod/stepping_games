@@ -461,8 +461,6 @@ class PPO(train_selfplay.BaseTrainer):
             #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
-        states = self.train_env.make_state(player_id, states)
-
         episode_len = self.train_env.episode_len[game_index]
 
         step = self.make_single_step(player_id, game_index, states)
