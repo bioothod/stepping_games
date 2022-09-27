@@ -162,7 +162,11 @@ def calculate_rewards(values, rewards, next_value, max_episode_len, gamma, tau):
 
 
 class ConnectX:
-    def __init__(self, config: EasyDict, critic):
+    def __init__(self, config: EasyDict, critic, summary_writer, summary_prefix: str, global_step: torch.Tensor):
+        self.summary_writer = summary_writer
+        self.summary_prefix = summary_prefix
+        self.global_step = global_step
+
         self.num_games = config.num_training_games
         self.num_actions = config.columns
         self.num_columns = config.columns
@@ -187,16 +191,22 @@ class ConnectX:
     def reset(self):
         self.games = torch.zeros((self.num_games, 1, self.num_rows, self.num_columns), dtype=self.observation_dtype, device='cpu')
 
-        self.states = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids), 3, self.num_rows, self.num_columns), dtype=torch.float32, device='cpu')
-        self.rewards = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.float32, device='cpu')
-        self.actions = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), device='cpu').long()
+        self.states = torch.zeros((self.num_games, self.max_episode_len, 3, self.num_rows, self.num_columns), dtype=torch.float32, device='cpu')
+        self.rewards = torch.zeros((self.num_games, self.max_episode_len), dtype=torch.float32, device='cpu')
+        self.actions = torch.zeros((self.num_games, self.max_episode_len), device='cpu').long()
+        self.player_id = torch.zeros((self.num_games, self.max_episode_len), device='cpu').long()
         self.log_probs = torch.zeros_like(self.rewards, device='cpu')
-        self.explorations = torch.zeros((self.num_games, self.max_episode_len, len(self.player_ids)), dtype=torch.bool, device='cpu')
+        self.explorations = torch.zeros((self.num_games, self.max_episode_len), dtype=torch.bool, device='cpu')
         self.next_values = torch.zeros_like(self.rewards, device='cpu')
         self.dones = torch.zeros(self.num_games, dtype=torch.bool, device='cpu')
         self.episode_len = torch.zeros(self.num_games, device='cpu').long()
 
-    def make_state(self, player_id, game_states):
+    def set_index_state(self, index, states):
+        self.games[index, ...] = states.to(self.games.device).detach().clone()
+        self.dones = torch.ones_like(self.dones, dtype=torch.bool)
+        self.dones[index] = False
+        
+    def make_states(self, player_id, game_states):
         num_games = len(game_states)
 
         states = torch.zeros((1 + len(self.player_ids), num_games, self.num_rows, self.num_columns), dtype=torch.float32)
@@ -209,11 +219,12 @@ class ConnectX:
         states = states.transpose(1, 0)
         return states
 
-    def current_states(self):
+    def current_states(self, player_id):
         game_index = self.running_index()
         games = self.games[game_index]
 
-        return game_index, games
+        states = self.make_states(player_id, games)
+        return game_index, states
 
     def running_index(self):
         index = torch.arange(len(self.games))
@@ -232,16 +243,21 @@ class ConnectX:
         rewards = []
         explorations = []
         for game_id in game_index:
-            episode_len = self.episode_len[game_id]
+            game_rewards = []
+            game_explorations = []
+            for player_id in self.player_ids:
+                player_index = self.player_id[game_id] == player_id
+                reward = self.rewards[game_id, player_index].sum(0)
+                game_rewards.append(reward)
 
-            reward = self.rewards[game_id, :episode_len, :].sum(0)
-            rewards.append(reward)
+                exploration = self.explorations[game_id, player_index].float().mean()
+                game_explorations.append(exploration)
 
-            exploration = self.explorations[game_id, :episode_len, :].float().sum(0) / float(episode_len)
-            explorations.append(exploration)
+            rewards.append(game_rewards)
+            explorations.append(game_explorations)
 
-        rewards = torch.stack(rewards, 0)
-        explorations = torch.stack(explorations, 0)
+        rewards = torch.tensor(rewards)
+        explorations = torch.tensor(explorations)
 
 
         std_rewards, mean_rewards = torch.std_mean(rewards, 0)
@@ -256,41 +272,47 @@ class ConnectX:
         return mean_rewards, std_rewards, mean_explorations, std_explorations, float(mean_timesteps), float(std_timesteps)
 
     def last_game_stats(self):
-        game_index = self.completed_index()[-1]
-        episode_len = self.episode_len[game_index]
+        game_id = self.completed_index()[-1]
+        rewards = []
 
-        rewards = torch.sum(self.rewards[game_index, :episode_len, :], 0).cpu().numpy()
+        for player_id in self.player_ids:
+            player_index = self.player_id[game_id] == player_id
+            reward = self.rewards[game_id, player_index].sum(0)
+            rewards.append(reward)
+
+        rewards = torch.tensor(rewards)
+        episode_len = self.episode_len[game_id]
+
         return int(episode_len), rewards
 
     def completed_games_and_states(self):
         completed_index = self.completed_index()
 
         episode_len = self.episode_len[completed_index]
-        total_states = torch.sum(episode_len) * len(self.player_ids)
+        total_states = torch.sum(episode_len)
         return len(completed_index), int(total_states)
 
     def update_game_rewards(self, player_id, game_index, states, actions, log_probs, rewards, dones, explorations, next_values):
-        player_index = self.player_ids.index(player_id)
         episode_index = self.episode_len[game_index]
 
-        self.states[game_index, episode_index, player_index] = states.detach().clone().to(self.states.device)
-        self.rewards[game_index, episode_index, player_index] = rewards.detach().clone().to(self.states.device)
-        self.actions[game_index, episode_index, player_index] = actions.detach().clone().to(self.states.device)
-        self.log_probs[game_index, episode_index, player_index] = log_probs.detach().clone().to(self.states.device)
-        self.explorations[game_index, episode_index, player_index] = explorations.detach().clone().to(self.states.device)
-        self.next_values[game_index, episode_index, player_index] = next_values.detach().clone().to(self.states.device)
+        self.player_id[game_index, episode_index] = player_id
+        self.states[game_index, episode_index] = states.detach().clone().to(self.states.device)
+        self.rewards[game_index, episode_index] = rewards.detach().clone().to(self.states.device)
+        self.actions[game_index, episode_index] = actions.detach().clone().to(self.states.device)
+        self.log_probs[game_index, episode_index] = log_probs.detach().clone().to(self.states.device)
+        self.explorations[game_index, episode_index] = explorations.detach().clone().to(self.states.device)
+        self.next_values[game_index, episode_index] = next_values.detach().clone().to(self.states.device)
         self.dones[game_index] = dones.detach().clone().to(self.states.device)
 
         cur_win_index = rewards == 1
         cur_win_game_index = game_index[cur_win_index]
         cur_win_episode_index = episode_index[cur_win_index]
-        for other_player_index, other_player_id in enumerate(self.player_ids):
-            if other_player_id == player_id:
-                continue
-
-            self.rewards[cur_win_game_index, cur_win_episode_index-1, other_player_index] = -1
+        self.rewards[cur_win_game_index, cur_win_episode_index-1] = -1
 
         self.episode_len[game_index] += 1
+        completed_episodes_index = self.episode_len[game_index] == self.max_episode_len
+        completed_game_index = game_index[completed_episodes_index]
+        self.dones[completed_game_index] = True
 
         self.total_games_completed += int(dones.sum().cpu().numpy())
 
@@ -306,50 +328,57 @@ class ConnectX:
         for game_id in game_index:
             episode_len = self.episode_len[game_id]
 
-            for player_idx in range(len(self.player_ids)):
-                states = self.states[game_id, :episode_len, player_idx, ...]
-                ret_states.append(states)
+            states = self.states[game_id, :episode_len, ...]
+            ret_states.append(states)
         ret_states = torch.cat(ret_states, 0).to(self.device)
 
-        ret_values = []
-        with torch.no_grad():
-            start_index = 0
-            while start_index < len(ret_states):
-                batch = ret_states[start_index : start_index + self.batch_size, ...]
-                values = self.critic(batch).detach()
-                ret_values.append(values)
-                start_index += len(batch)
+        if len(ret_states) == 0:
+            raise ValueError(f'dump: game_index: {len(game_index), ret_states: {len(ret_states)}}: zero-length states array')
 
-        ret_values = torch.cat(ret_values)
+        with torch.no_grad():
+            ret_values = self.critic(ret_states).detach()
         ret_values_cpu = ret_values.cpu()
 
+        summary = defaultdict(list)
         values_index_start = 0
         for game_id in game_index:
             episode_len = self.episode_len[game_id]
 
-            for player_idx in range(len(self.player_ids)):
-                actions = self.actions[game_id, :episode_len, player_idx]
-                log_probs = self.log_probs[game_id, :episode_len, player_idx]
-                rewards = self.rewards[game_id, :episode_len, player_idx]
-                next_values = self.next_values[game_id, episode_len-1, player_idx]
+            actions = self.actions[game_id, :episode_len]
+            log_probs = self.log_probs[game_id, :episode_len]
+            rewards = self.rewards[game_id, :episode_len]
+            next_values = self.next_values[game_id, episode_len-1]
 
-                values = ret_values_cpu[values_index_start : values_index_start + episode_len]
-                values_index_start += episode_len
+            values = ret_values_cpu[values_index_start : values_index_start + episode_len]
+            values_index_start += episode_len
 
-                returns, gaes = calculate_rewards(values, rewards, next_values, self.max_episode_len, self.gamma, self.tau)
+            returns, gaes = calculate_rewards(values, rewards, next_values, self.max_episode_len, self.gamma, self.tau)
 
-                returns = torch.tensor(returns).float()
-                gaes = torch.tensor(gaes).float()
+            returns = torch.tensor(returns).float()
+            gaes = torch.tensor(gaes).float()
 
-                ret_actions.append(actions)
-                ret_log_probs.append(log_probs)
-                ret_gaes.append(gaes)
-                ret_returns.append(returns)
+            ret_actions.append(actions)
+            ret_log_probs.append(log_probs)
+            ret_gaes.append(gaes)
+            ret_returns.append(returns)
+
+            exploration = self.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
+
+            summary['rewards'].append(rewards.sum())
+            summary['exploration'].append(exploration)
 
         ret_actions = torch.cat(ret_actions, 0).to(self.device)
         ret_log_probs = torch.cat(ret_log_probs, 0).to(self.device)
         ret_gaes = torch.cat(ret_gaes, 0).to(self.device)
         ret_returns = torch.cat(ret_returns, 0).to(self.device)
+
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/episode_len', self.episode_len.float().mean(), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/returns', torch.mean(ret_returns), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/gaes', torch.mean(ret_gaes), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/rewards', np.mean(summary['rewards']), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/exploration', np.mean(summary['exploration']), self.global_step)
+        self.summary_writer.add_histogram(f'{self.summary_prefix}/actions', ret_actions, self.global_step)
+        self.summary_writer.add_histogram(f'{self.summary_prefix}/log_probs', ret_log_probs, self.global_step)
 
         return game_index, ret_states, ret_actions, ret_log_probs, ret_gaes, ret_values, ret_returns
 
@@ -362,7 +391,8 @@ class ConnectX:
         self.games[game_index] = games.detach().clone()
         #print(f'{self.games[0].detach().cpu().numpy().astype(int).reshape(self.num_rows, self.num_columns)}')
 
-        return games, rewards, dones
+        states = self.make_states(player_id, games)
+        return states, rewards, dones
 
     def close(self):
         pass
