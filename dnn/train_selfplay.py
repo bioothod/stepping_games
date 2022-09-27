@@ -1,19 +1,13 @@
-import itertools
 import os
 import random
 
-from easydict import EasyDict as edict
-
 import numpy as np
 import torch
-import torch.nn as nn
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
-import action_strategies
-import connectx_impl
+import evaluate
 import logger
-import networks
 
 class BaseTrainer:
     def __init__(self, config):
@@ -35,6 +29,8 @@ class BaseTrainer:
         self.config = config
 
         os.makedirs(self.config.checkpoints_dir, exist_ok=True)
+        self.mean_score_eval_checkpoints_dir = os.path.join(self.config.checkpoints_dir, 'mean_score_checkpoints')
+        os.makedirs(self.mean_score_eval_checkpoints_dir, exist_ok=True)
 
         self.config.logfile = os.path.join(self.config.checkpoints_dir, 'train.log')
         self.config.log_to_stdout = True
@@ -50,125 +46,17 @@ class BaseTrainer:
         self.num_evaluations_per_epoch = 100
         self.evaluation_scores = []
         self.max_eval_metric = 0.0
+        self.max_mean_eval_metric = 0.0
 
-        if not config.get('eval_checkpoint_path'):
-            import gym_env
-            from multiprocess_env import MultiprocessEnv
+        eval_checkpoint_path = config.get('eval_checkpoint_path')
+        if eval_checkpoint_path:
+            self.eval_agent_name = eval_checkpoint_path
 
-            self.eval_agent_name = 'negamax'
-
-            make_args_fn = lambda: {}
-            def make_env_fn(seed=None):
-                os.environ['CUDA_VISIBLE_DEVICES'] = ''
-                torch.manual_seed(seed)
-                np.random.seed(seed)
-                random.seed(seed)
-
-                pair = [None, self.eval_agent_name]
-
-                return gym_env.ConnectXGym(config, pair)
-
-            eval_num_workers = 50
-            self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, self.config, self.config.eval_seed, eval_num_workers)
-            self.evaluate = lambda agent: self.evaluate_multiprocess(agent)
-
+            eval_agent = evaluate.create_submission_agent(eval_checkpoint_path)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent)
         else:
-            from submission.model import Actor as eval_agent_model
-            import connectx_impl
-
-            self.eval_agent = eval_agent_model(config)
-            checkpoint = torch.load(config.eval_checkpoint_path, map_location='cpu')
-            self.eval_agent.load_state_dict(checkpoint['actor_state_dict'])
-            self.eval_agent.train(False)
-
-            self.eval_agent_name = config.eval_checkpoint_path
-
-            self.eval_env = connectx_impl.ConnectX(config, self.num_evaluations_per_epoch)
-            self.evaluate = lambda agent: self.evaluate_torch(agent)
-
-
-    def evaluate_multiprocess(self, train_agent):
-        train_agent.set_training_mode(False)
-        evaluation_rewards = []
-        
-        while len(evaluation_rewards) < self.num_evaluations_per_epoch:
-            states = self.eval_env.reset()
-            worker_ids = self.eval_env.worker_ids
-
-            batch_size = len(states)
-            episode_rewards = [0.0] * batch_size
-
-            while True:
-                states = torch.from_numpy(states).to(self.config.device)
-
-                actions = train_agent.actor.greedy_actions(states)
-                actions = actions.detach().cpu().numpy()
-                new_states, rewards, dones, infos = self.eval_env.step(worker_ids, actions)
-
-                ready_states = []
-                ret_worker_ids = []
-                for worker_id, new_state, reward, done in zip(worker_ids, new_states, rewards, dones):
-                    if not done:
-                        ready_states.append(new_state)
-                        ret_worker_ids.append(worker_id)
-                        
-                    episode_rewards[worker_id] += reward
-
-                if len(ready_states) == 0:
-                    break
-
-                states = np.array(ready_states, dtype=np.float32)
-                worker_ids = ret_worker_ids
-
-            evaluation_rewards += episode_rewards
-
-        last = evaluation_rewards[-self.num_evaluations_per_epoch:]
-        wins = int(np.count_nonzero(np.array(last) >= 1) / len(last) * 100)
-        
-        return wins, evaluation_rewards
-
-    def evaluate_torch(self, train_agent):
-        train_agent.set_training_mode(False)
-
-        train_player_id = 1
-        eval_player_id = 2
-
-        self.eval_env.reset()
-
-        while True:
-            for player_id in [train_player_id, eval_player_id]:
-                game_index, states = self.eval_env.current_states()
-
-                if player_id == 2:
-                    states = train_agent.make_opposite(states)
-
-                if player_id == train_player_id:
-                    states = states.to(self.config.device)
-                    actions, log_probs, explorations = train_agent.actor.dist_actions(states)
-                else:
-                    actions, log_probs, explorations = self.eval_agent.dist_actions(states)
-
-                states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
-
-                self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, explorations, torch.zeros_like(rewards))
-
-            completed_index = self.eval_env.completed_index()
-            if len(completed_index) >= self.num_evaluations_per_epoch:
-                break
-
-        completed_index = self.eval_env.completed_index()
-
-        player_idx = self.config.player_ids.index(train_player_id)
-
-        evaluation_rewards = []
-        for game_id in completed_index:
-            episode_len = self.eval_env.episode_len[game_id]
-            reward = self.eval_env.rewards[game_id, :episode_len, player_idx].sum()
-            evaluation_rewards.append(reward)
-
-        wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
-
-        return wins, evaluation_rewards
+            self.eval_agent_name = 'negamax'
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name)
 
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
@@ -188,15 +76,13 @@ class BaseTrainer:
 
             last_timesteps, last_rewards = train_env.last_game_stats()
 
-            eval_metric, eval_rewards = self.evaluate(train_agent)
+            eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
             self.evaluation_scores += eval_rewards
 
             mean_eval_score = np.mean(self.evaluation_scores)
             std_eval_score = np.std(self.evaluation_scores)
 
             mean_eval_score = np.mean(self.evaluation_scores)
-
-            wins100 = int(np.count_nonzero(np.array(self.evaluation_scores[-100:]) >= 1) / len(self.evaluation_scores[-100:]) * 100)
 
             self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
@@ -208,7 +94,7 @@ class BaseTrainer:
                              f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
                              f'r: {mean_eval_score:5.2f}\u00B1{std_eval_score:4.2f}, '
-                             f'mean: {mean_eval_score:6.3f}, '
+                             f'mean: {mean_eval_score:7.4f} / {self.max_mean_eval_metric:7.4f}, '
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 
@@ -219,6 +105,13 @@ class BaseTrainer:
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
                 train_agent.save(checkpoint_path)
                 self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {train_agent.name} -> {checkpoint_path}')
+
+            if mean_eval_score > self.max_mean_eval_metric:
+                self.max_mean_eval_metric = mean_eval_score
+
+                checkpoint_path = os.path.join(self.mean_score_eval_checkpoints_dir, f'{train_agent.name}_{mean_eval_score:.4f}.ckpt')
+                train_agent.save(checkpoint_path)
+                self.logger.info(f'mean_eval_score: {mean_eval_score:.4f}, saved {train_agent.name} -> {checkpoint_path}')
 
     def try_load(self, name, model):
         max_metric = None
