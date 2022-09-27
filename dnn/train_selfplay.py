@@ -3,6 +3,7 @@ import random
 
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 torch.backends.cuda.matmul.allow_tf32 = True
 
@@ -13,6 +14,9 @@ class BaseTrainer:
     def __init__(self, config):
         config.train_seed = 444
         config.eval_seed = 555
+
+        self.summary_writer = SummaryWriter(log_dir=config.tensorboard_log_dir)
+        self.eval_global_step = torch.zeros(1).long()
 
         torch.manual_seed(config.train_seed)
         np.random.seed(config.train_seed)
@@ -42,7 +46,6 @@ class BaseTrainer:
         self.logger.info(f'config:\n{config_message}')
 
         self.num_evaluations_per_epoch = 100
-        self.evaluation_scores = []
         self.max_eval_metric = 0.0
         self.max_mean_eval_metric = -float('inf')
 
@@ -51,10 +54,10 @@ class BaseTrainer:
             self.eval_agent_name = eval_checkpoint_path
 
             eval_agent = evaluate.create_submission_agent(eval_checkpoint_path)
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.eval_global_step)
         else:
             self.eval_agent_name = 'negamax'
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name, self.summary_writer, self.eval_global_step)
 
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
@@ -63,7 +66,7 @@ class BaseTrainer:
         training_started = False
 
         for _ in range(self.config.eval_after_train_steps):
-            train_agent.set_training_mode(False)
+            train_agent.set_training_mode(True)
 
             training_started = self.try_train()
 
@@ -74,13 +77,12 @@ class BaseTrainer:
 
             last_timesteps, last_rewards = train_env.last_game_stats()
 
+            train_agent.set_training_mode(False)
             eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
-            self.evaluation_scores += eval_rewards
+            self.eval_global_step += 1
 
-            mean_eval_score = np.mean(self.evaluation_scores)
-            std_eval_score = np.std(self.evaluation_scores)
-
-            mean_eval_score = np.mean(self.evaluation_scores)
+            mean_eval_score = np.mean(eval_rewards)
+            std_eval_score = np.std(eval_rewards)
 
             self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
@@ -91,8 +93,7 @@ class BaseTrainer:
                              f'r: {mean_rewards[0]:5.2f}\u00B1{std_rewards[0]:4.2f} / {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f}, '
                              f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
-                             f'r: {mean_eval_score:5.2f}\u00B1{std_eval_score:4.2f}, '
-                             f'mean: {mean_eval_score:7.4f} / {self.max_mean_eval_metric:7.4f}, '
+                             f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
                              f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
                              )
 
@@ -109,6 +110,7 @@ class BaseTrainer:
 
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_mean_score_improvement.ckpt')
                 train_agent.save(checkpoint_path)
+                self.logger.info(f'mean_eval_score: {mean_eval_score:.4f}, saved {train_agent.name} -> {checkpoint_path}')
 
     def try_load(self, name, model):
         max_metric = None
