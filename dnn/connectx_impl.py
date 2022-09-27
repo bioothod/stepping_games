@@ -199,11 +199,32 @@ class ConnectX:
         self.dones = torch.zeros(self.num_games, dtype=torch.bool, device='cpu')
         self.episode_len = torch.zeros(self.num_games, device='cpu').long()
 
-    def current_states(self):
+    def set_state(self, states):
+        running_index = self.running_index()
+        episode_index = self.episode_len[running_index]
+
+        self.games[running_index, episode_index, ...] = states.detach().clone()
+
+    def make_opposite(self, state):
+        state_opposite = torch.zeros_like(state)
+        state_opposite[state == 1] = 2
+        state_opposite[state == 2] = 1
+        return state_opposite
+
+    def make_states(self, player_id, games):
+        states = games
+
+        if player_id == 2:
+            states = self.make_opposite(states)
+
+        return states
+
+    def current_states(self, player_id):
         game_index = self.running_index()
         games = self.games[game_index]
 
-        return game_index, games
+        states = self.make_states(player_id, games)
+        return game_index, states
 
     def running_index(self):
         index = torch.arange(len(self.games))
@@ -281,6 +302,9 @@ class ConnectX:
             self.rewards[cur_win_game_index, cur_win_episode_index-1, other_player_index] = -1
 
         self.episode_len[game_index] += 1
+        completed_episodes_index = self.episode_len[game_index] == self.max_episode_len
+        completed_game_index = game_index[completed_episodes_index]
+        self.dones[completed_game_index] = True
 
         self.total_games_completed += int(dones.sum().cpu().numpy())
 
@@ -352,7 +376,8 @@ class ConnectX:
         self.games[game_index] = games.detach().clone()
         #print(f'{self.games[0].detach().cpu().numpy().astype(int).reshape(self.num_rows, self.num_columns)}')
 
-        return games, rewards, dones
+        states = self.make_states(player_id, games)
+        return states, rewards, dones
 
     def close(self):
         pass
