@@ -164,7 +164,11 @@ def calculate_rewards(values, rewards, next_value, max_episode_len, gamma, tau):
 
 
 class ConnectX:
-    def __init__(self, config: EasyDict, critic):
+    def __init__(self, config: EasyDict, critic, summary_writer, summary_prefix: str, global_step: torch.Tensor):
+        self.summary_writer = summary_writer
+        self.summary_prefix = summary_prefix
+        self.global_step = global_step
+
         self.num_games = config.num_training_games
         self.num_actions = config.columns
         self.num_columns = config.columns
@@ -250,8 +254,7 @@ class ConnectX:
                 reward = self.rewards[game_id, player_index].sum(0)
                 game_rewards.append(reward)
 
-                episode_len = self.episode_len[game_id] / len(self.player_ids)
-                exploration = self.explorations[game_id, player_id].float().sum(0) / episode_len
+                exploration = self.explorations[game_id, player_index].float().mean()
                 game_explorations.append(exploration)
 
             rewards.append(game_rewards)
@@ -290,7 +293,7 @@ class ConnectX:
         completed_index = self.completed_index()
 
         episode_len = self.episode_len[completed_index]
-        total_states = torch.sum(episode_len) * len(self.player_ids)
+        total_states = torch.sum(episode_len)
         return len(completed_index), int(total_states)
 
     def update_game_rewards(self, player_id, game_index, states, actions, log_probs, rewards, dones, explorations, next_values):
@@ -333,18 +336,14 @@ class ConnectX:
             ret_states.append(states)
         ret_states = torch.cat(ret_states, 0).to(self.device)
 
-        ret_values = []
-        with torch.no_grad():
-            start_index = 0
-            while start_index < len(ret_states):
-                batch = ret_states[start_index : start_index + self.batch_size, ...]
-                values = self.critic(batch).detach()
-                ret_values.append(values)
-                start_index += len(batch)
+        if len(ret_states) == 0:
+            raise ValueError(f'dump: game_index: {len(game_index), ret_states: {len(ret_states)}}: zero-length states array')
 
-        ret_values = torch.cat(ret_values)
+        with torch.no_grad():
+            ret_values = self.critic(ret_states).detach()
         ret_values_cpu = ret_values.cpu()
 
+        summary = defaultdict(list)
         values_index_start = 0
         for game_id in game_index:
             episode_len = self.episode_len[game_id]
@@ -367,10 +366,23 @@ class ConnectX:
             ret_gaes.append(gaes)
             ret_returns.append(returns)
 
+            exploration = self.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
+
+            summary['rewards'].append(rewards.sum())
+            summary['exploration'].append(exploration)
+
         ret_actions = torch.cat(ret_actions, 0).to(self.device)
         ret_log_probs = torch.cat(ret_log_probs, 0).to(self.device)
         ret_gaes = torch.cat(ret_gaes, 0).to(self.device)
         ret_returns = torch.cat(ret_returns, 0).to(self.device)
+
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/episode_len', self.episode_len.float().mean(), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/returns', torch.mean(ret_returns), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/gaes', torch.mean(ret_gaes), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/rewards', np.mean(summary['rewards']), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/exploration', np.mean(summary['exploration']), self.global_step)
+        self.summary_writer.add_histogram(f'{self.summary_prefix}/actions', ret_actions, self.global_step)
+        self.summary_writer.add_histogram(f'{self.summary_prefix}/log_probs', ret_log_probs, self.global_step)
 
         return game_index, ret_states, ret_actions, ret_log_probs, ret_gaes, ret_values, ret_returns
 
