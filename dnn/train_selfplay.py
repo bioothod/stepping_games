@@ -29,8 +29,6 @@ class BaseTrainer:
         self.config = config
 
         os.makedirs(self.config.checkpoints_dir, exist_ok=True)
-        self.mean_score_eval_checkpoints_dir = os.path.join(self.config.checkpoints_dir, 'mean_score_checkpoints')
-        os.makedirs(self.mean_score_eval_checkpoints_dir, exist_ok=True)
 
         self.config.logfile = os.path.join(self.config.checkpoints_dir, 'train.log')
         self.config.log_to_stdout = True
@@ -46,7 +44,7 @@ class BaseTrainer:
         self.num_evaluations_per_epoch = 100
         self.evaluation_scores = []
         self.max_eval_metric = 0.0
-        self.max_mean_eval_metric = 0.0
+        self.max_mean_eval_metric = -float('inf')
 
         eval_checkpoint_path = config.get('eval_checkpoint_path')
         if eval_checkpoint_path:
@@ -109,9 +107,8 @@ class BaseTrainer:
             if mean_eval_score > self.max_mean_eval_metric:
                 self.max_mean_eval_metric = mean_eval_score
 
-                checkpoint_path = os.path.join(self.mean_score_eval_checkpoints_dir, f'{train_agent.name}_{mean_eval_score:.4f}.ckpt')
+                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_mean_score_improvement.ckpt')
                 train_agent.save(checkpoint_path)
-                self.logger.info(f'mean_eval_score: {mean_eval_score:.4f}, saved {train_agent.name} -> {checkpoint_path}')
 
     def try_load(self, name, model):
         max_metric = None
@@ -150,4 +147,4 @@ class BaseTrainer:
         return False
         
     def stop(self):
-        self.eval_env.close()
+        self.evaluation.close()
