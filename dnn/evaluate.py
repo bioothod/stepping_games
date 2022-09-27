@@ -1,4 +1,5 @@
 import os
+import random
 
 from copy import deepcopy
 
@@ -21,9 +22,12 @@ def create_submission_agent(checkpoint_path):
     return agent
 
 class MultiprocessEval:
-    def __init__(self, config, num_evaluations, agent_name):
+    def __init__(self, config, num_evaluations, agent_name, summary_writer, global_step):
         import gym_env
         from multiprocess_env import MultiprocessEnv
+
+        self.summary_writer = summary_writer
+        self.global_step = global_step
 
         self.agent_name = agent_name
         self.num_evaluations = num_evaluations
@@ -93,8 +97,11 @@ class MultiprocessEval:
         return wins, evaluation_rewards
 
 class DNNEval:
-    def __init__(self, config, num_evaluations, agent):
+    def __init__(self, config, num_evaluations, agent, summary_writer, global_step):
         import connectx_impl
+
+        self.summary_writer = summary_writer
+        self.global_step = global_step
 
         self.num_evaluations = num_evaluations
         self.agent = agent
@@ -105,7 +112,7 @@ class DNNEval:
 
         config = deepcopy(config)
         config.num_training_games = num_evaluations
-        self.eval_env = connectx_impl.ConnectX(config, None)
+        self.eval_env = connectx_impl.ConnectX(config, None, self.summary_writer, 'eval', self.global_step)
 
     def close(self):
         self.eval_env.close()
@@ -138,31 +145,48 @@ class DNNEval:
         completed_index = self.eval_env.completed_index()
 
         evaluation_rewards = []
+        evaluation_explorations = []
         for game_id in completed_index:
             player_index = self.eval_env.player_id[game_id] == self.train_player_id
 
             reward = self.eval_env.rewards[game_id, player_index].sum()
             evaluation_rewards.append(reward)
 
+            episode_len = self.eval_env.episode_len[game_id]
+            explorations = self.eval_env.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
+            evaluation_explorations.append(explorations)
+
+
         wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
+
+        self.summary_writer.add_scalar(f'eval/wins', wins, self.global_step)
+        self.summary_writer.add_scalar(f'eval/episode_rewards', np.mean(evaluation_rewards), self.global_step)
+        self.summary_writer.add_scalar(f'eval/episode_len', self.eval_env.episode_len.float().mean(), self.global_step)
+        self.summary_writer.add_scalar(f'eval/exploration', np.mean(evaluation_explorations), self.global_step)
 
         return wins, evaluation_rewards
 
 class Evaluate:
-    def __init__(self, config, logger, num_evaluations, eval_agent):
+    def __init__(self, config, logger, num_evaluations, eval_agent, summary_writer, global_step):
+        self.eval_seed = config.eval_seed
+
         self.logger = logger
         self.config = deepcopy(config)
         self.config['num_training_games'] = num_evaluations
 
         if isinstance(eval_agent, str):
-            self.eval_obj = MultiprocessEval(config, num_evaluations, eval_agent)
+            self.eval_obj = MultiprocessEval(config, num_evaluations, eval_agent, summary_writer, global_step)
         else:
-            self.eval_obj = DNNEval(config, num_evaluations, eval_agent)
+            self.eval_obj = DNNEval(config, num_evaluations, eval_agent, summary_writer, global_step)
 
     def close(self):
         self.eval_obj.close()
 
     def evaluate(self, train_agent):
+        torch.manual_seed(self.eval_seed)
+        np.random.seed(self.eval_seed)
+        random.seed(self.eval_seed)
+
         return self.eval_obj.evaluate(train_agent)
 
         mcts_agent = mcts.MCTSNaive(self.config.train_player_id, self.config, 10, train_agent)
