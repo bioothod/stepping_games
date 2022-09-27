@@ -130,7 +130,7 @@ class Actor(nn.Module):
         action = actions.squeeze(0).detach().cpu().numpy()
         return int(action)
 
-defalut_config = {
+default_config = {
     'checkpoint_path': 'submission.ckpt',
     'rows': 6,
     'columns': 7,
