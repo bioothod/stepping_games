@@ -49,6 +49,9 @@ class MultiprocessEval:
         eval_num_workers = min(num_evaluations, 50)
         self.eval_env = MultiprocessEnv('eval', make_env_fn, make_args_fn, config, config.eval_seed, eval_num_workers)
 
+    def close(self):
+        self.eval_env.close()
+
     def evaluate(self, train_agent):
         train_agent.set_training_mode(False)
         evaluation_rewards = []
@@ -63,7 +66,7 @@ class MultiprocessEval:
             while True:
                 states = torch.from_numpy(states).to(self.device)
 
-                actions = train_agent.actor.greedy_actions(states)
+                actions, _, _ = train_agent.actor.dist_actions(states)
                 actions = actions.detach().cpu().numpy()
                 new_states, rewards, dones, infos = self.eval_env.step(worker_ids, actions)
 
@@ -104,6 +107,9 @@ class DNNEval:
         config.num_training_games = num_evaluations
         self.eval_env = connectx_impl.ConnectX(config, None)
 
+    def close(self):
+        self.eval_env.close()
+
     def evaluate(self, train_agent):
         train_agent.set_training_mode(False)
 
@@ -112,6 +118,8 @@ class DNNEval:
         while True:
             for player_id in self.player_ids:
                 game_index, states = self.eval_env.current_states(player_id)
+                if len(game_index) == 0:
+                    break
 
                 if player_id == self.train_player_id:
                     states = states.to(self.device)
@@ -129,12 +137,11 @@ class DNNEval:
 
         completed_index = self.eval_env.completed_index()
 
-        player_idx = self.player_ids.index(self.train_player_id)
-
         evaluation_rewards = []
         for game_id in completed_index:
-            episode_len = self.eval_env.episode_len[game_id]
-            reward = self.eval_env.rewards[game_id, :episode_len, player_idx].sum()
+            player_index = self.eval_env.player_id[game_id] == self.train_player_id
+
+            reward = self.eval_env.rewards[game_id, player_index].sum()
             evaluation_rewards.append(reward)
 
         wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
@@ -144,18 +151,19 @@ class DNNEval:
 class Evaluate:
     def __init__(self, config, logger, num_evaluations, eval_agent):
         self.logger = logger
-        self.config = config
+        self.config = deepcopy(config)
+        self.config['num_training_games'] = num_evaluations
 
         if isinstance(eval_agent, str):
             self.eval_obj = MultiprocessEval(config, num_evaluations, eval_agent)
         else:
             self.eval_obj = DNNEval(config, num_evaluations, eval_agent)
 
-    def evaluate(self, train_agent):
-        if True:
-            return self.eval_obj.evaluate(train_agent)
+    def close(self):
+        self.eval_obj.close()
 
-        config = deepcopy(self.config)
-        config['num_training_games'] = 10
-        mcts_agent = mcts.MCTSNaive(self.config.train_player_id, config, train_agent)
+    def evaluate(self, train_agent):
+        return self.eval_obj.evaluate(train_agent)
+
+        mcts_agent = mcts.MCTSNaive(self.config.train_player_id, self.config, 10, train_agent)
         return self.eval_obj.evaluate(mcts_agent)
