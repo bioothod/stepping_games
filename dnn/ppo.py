@@ -168,14 +168,14 @@ class PPO(train_selfplay.BaseTrainer):
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
-            'num_features': 1024,
-            'hidden_dims': [256],
+            'num_features': 512,
+            'hidden_dims': [128],
 
             'max_gradient_norm': 1.0,
 
             'num_training_games': 1024,
 
-            'batch_size': 1024*8,
+            'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
