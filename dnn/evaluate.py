@@ -134,7 +134,10 @@ class DNNEval:
                     states = states.to(self.device)
                     actions, log_probs, explorations = train_agent.actor.dist_actions(states)
                 else:
-                    actions, log_probs, explorations = self.agent.dist_actions(states)
+                    eval_states = self.eval_env.games[game_index]
+                    if player_id == 2:
+                        eval_states = self.eval_env.make_opposite(eval_states)
+                    actions, log_probs, explorations = self.agent.dist_actions(eval_states)
 
                 states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
