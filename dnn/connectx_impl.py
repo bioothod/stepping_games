@@ -1,12 +1,8 @@
-import joblib
-
 from collections import defaultdict
 from easydict import EasyDict
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 @torch.jit.script
 def check_reward_single_game(game, player_id, num_rows, num_columns, inarow):
@@ -96,7 +92,6 @@ def check_reward(games, player_id, num_rows, num_columns, inarow):
                 idx = idx[torch.logical_not(win_idx)]
 
     default_reward = float(1.0 / float(num_rows * num_columns))
-    #default_reward = 0.0
 
     rewards = torch.where(dones, 1.0, default_reward)
 
@@ -194,7 +189,7 @@ class ConnectX:
     def reset(self):
         self.games = torch.zeros((self.num_games,) + self.observation_shape, dtype=self.observation_dtype, device='cpu')
 
-        self.states = torch.zeros((self.num_games, self.max_episode_len) + self.observation_shape, dtype=torch.float32, device='cpu')
+        self.states = torch.zeros((self.num_games, self.max_episode_len, 1, self.num_rows, self.num_actions), dtype=torch.float32, device='cpu')
         self.rewards = torch.zeros((self.num_games, self.max_episode_len), dtype=torch.float32, device='cpu')
         self.actions = torch.zeros((self.num_games, self.max_episode_len), device='cpu').long()
         self.player_id = torch.zeros((self.num_games, self.max_episode_len), device='cpu').long()
@@ -215,13 +210,11 @@ class ConnectX:
         state_opposite[state == 2] = 1
         return state_opposite
 
-    def make_states(self, player_id, games):
-        states = games
-
+    def make_states(self, player_id, game_states):
         if player_id == 2:
-            states = self.make_opposite(states)
+            game_states = self.make_opposite(game_states)
 
-        return states
+        return game_states
 
     def current_states(self, player_id):
         game_index = self.running_index()
@@ -336,11 +329,11 @@ class ConnectX:
             ret_states.append(states)
         ret_states = torch.cat(ret_states, 0).to(self.device)
 
-        if len(ret_states) == 0:
-            raise ValueError(f'dump: game_index: {len(game_index), ret_states: {len(ret_states)}}: zero-length states array')
-
         with torch.no_grad():
+            self.critic.train(False)
             ret_values = self.critic(ret_states).detach()
+            self.critic.train(True)
+
         ret_values_cpu = ret_values.cpu()
 
         summary = defaultdict(list)
