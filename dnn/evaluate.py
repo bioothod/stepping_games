@@ -110,6 +110,8 @@ class DNNEval:
         self.player_ids = config.player_ids
         self.device = config.device
 
+        self.max_mean_episode_reward = -float('inf')
+
         config = deepcopy(config)
         config.num_training_games = num_evaluations
         self.eval_env = connectx_impl.ConnectX(config, None, self.summary_writer, 'eval', self.global_step)
@@ -158,9 +160,14 @@ class DNNEval:
 
 
         wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
+        mean_evaluation_reward = float(np.mean(evaluation_rewards))
+        self.max_mean_episode_reward = max(self.max_mean_episode_reward, mean_evaluation_reward)
 
         self.summary_writer.add_scalar(f'eval/wins', wins, self.global_step)
-        self.summary_writer.add_scalar(f'eval/episode_rewards', np.mean(evaluation_rewards), self.global_step)
+        self.summary_writer.add_scalars(f'eval/episode_rewards', {
+            'mean': mean_evaluation_reward,
+            'max': self.max_mean_episode_reward,
+        }, self.global_step)
         self.summary_writer.add_scalar(f'eval/episode_len', self.eval_env.episode_len.float().mean(), self.global_step)
         self.summary_writer.add_scalar(f'eval/exploration', np.mean(evaluation_explorations), self.global_step)
 
