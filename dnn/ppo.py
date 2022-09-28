@@ -215,11 +215,12 @@ class PPO(train_selfplay.BaseTrainer):
         self.max_eval_metric = 0.0
         if model_loaded:
             eval_time_start = perf_counter()
-            self.max_eval_metric, _ = self.evaluation.evaluate(self)
+            self.max_eval_metric, eval_rewards = self.evaluation.evaluate(self)
+            self.max_mean_eval_metric = np.mean(eval_rewards)
             self.eval_global_step += 1
             eval_time = perf_counter() - eval_time_start
 
-            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, evaluation time: {eval_time:.1f} sec')
+            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, mean: {self.max_mean_eval_metric:.4f} evaluation time: {eval_time:.1f} sec')
 
         #exit(0)
 
@@ -441,7 +442,9 @@ class PPO(train_selfplay.BaseTrainer):
         states = states.to(self.config.device)
 
         with torch.no_grad():
+            self.actor.train(False)
             actions, log_probs, explorations = self.actor.dist_actions(states)
+            self.actor.train(True)
 
         new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
 
@@ -474,7 +477,9 @@ class PPO(train_selfplay.BaseTrainer):
             with torch.no_grad():
                 next_truncated_states = step.new_states[truncated_indexes, ...]
                 next_truncated_states = next_truncated_states.to(self.config.device)
+                self.critic.train(False)
                 nv = self.critic(next_truncated_states).detach().cpu()
+                self.critic.train(True)
                 next_values[truncated_indexes] = nv
 
         self.train_env.update_game_rewards(player_id, game_index, step.states, step.actions, step.log_probs, step.rewards, step.dones, step.explorations, next_values)
@@ -498,7 +503,7 @@ class PPO(train_selfplay.BaseTrainer):
         requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
         winning_rate = float(self.max_eval_metric) / 100.
         number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len * len(self.config.player_ids)
-        number_of_states = max(number_of_states, requested_states_size)
+        number_of_states_or_requested_states = max(number_of_states, requested_states_size)
 
         completed_games = 0
         completed_states = 0
@@ -513,14 +518,14 @@ class PPO(train_selfplay.BaseTrainer):
                              f'completed_states: {completed_states}, '
                              f'requested_size {requested_states_size}')
 
-            if completed_states >= number_of_states:
+            if completed_states >= number_of_states_or_requested_states:
                 break
 
         self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.train_global_step)
         self.summary_writer.add_scalars('train_iterations/completed_states', {
             'completed_states': completed_states,
             'config_requested_states_size': requested_states_size,
-            'breakout_number_of_staes': number_of_states
+            'winning_rate_number_of_states': number_of_states,
         }, self.train_global_step)
 
 
