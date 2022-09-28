@@ -205,12 +205,23 @@ class ConnectX:
         self.games[index, ...] = states.to(self.games.device).detach().clone()
         self.dones = torch.ones_like(self.dones, dtype=torch.bool)
         self.dones[index] = False
-        
+
+
+    def make_opposite(self, state):
+        state_opposite = torch.zeros_like(state)
+        state_opposite[state == 1] = 2
+        state_opposite[state == 2] = 1
+        return state_opposite
+
     def make_states(self, player_id, game_states):
+        if player_id == 2:
+            game_states = self.make_opposite(game_states)
+
         num_games = len(game_states)
 
         states = torch.zeros((1 + len(self.player_ids), num_games, self.num_rows, self.num_columns), dtype=torch.float32)
-        states[0, ...] = player_id
+        empty_idx = game_states[:, 0, ...] == 0
+        states[0, empty_idx] = 1
 
         for idx, pid in enumerate(self.player_ids):
             player_idx = game_states[:, 0, ...] == pid
@@ -336,7 +347,9 @@ class ConnectX:
             raise ValueError(f'dump: game_index: {len(game_index), ret_states: {len(ret_states)}}: zero-length states array')
 
         with torch.no_grad():
+            self.critic.train(False)
             ret_values = self.critic(ret_states).detach()
+            self.critic.train(True)
         ret_values_cpu = ret_values.cpu()
 
         summary = defaultdict(list)
