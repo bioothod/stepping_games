@@ -6,9 +6,9 @@ from model import Actor, default_config
 
 want_test = os.environ.get('RUN_KAGGLE_TEST')
 if want_test:
-    default_config['checkpoint_path'] = 'submission.ckpt'
+    default_config['checkpoint_path'] = 'submission_9_ppo55.ckpt'
 else:
-    default_config['checkpoint_path'] = '/kaggle_simulations/agent/submission.ckpt'
+    default_config['checkpoint_path'] = '/kaggle_simulations/agent/submission_9_ppo55.ckpt'
 
 actor = Actor(default_config)
 checkpoint = torch.load(default_config['checkpoint_path'], map_location='cpu')
