@@ -165,7 +165,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
-            'value_stopping_mse': 0.01,
+            'value_stopping_mse': 0.85,
 
             'states_sampling_ratio': 3,
 
@@ -397,6 +397,7 @@ class PPO(train_selfplay.BaseTrainer):
                 mse_returns.append(mse_ret.item())
 
                 if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
+                #if mse_val.item() > self.config.value_stopping_mse:
                     break
 
             #if total_sampled >= len(states):
