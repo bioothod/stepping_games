@@ -141,7 +141,7 @@ class DNNEval:
 
                 states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
-                self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, explorations, torch.zeros_like(rewards))
+                self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
 
             completed_index = self.eval_env.completed_index()
             if len(completed_index) >= self.num_evaluations:
@@ -151,16 +151,15 @@ class DNNEval:
 
         evaluation_rewards = []
         evaluation_explorations = []
+        player_stat = self.eval_env.player_stats[self.train_player_id]
         for game_id in completed_index:
-            player_index = self.eval_env.player_id[game_id] == self.train_player_id
+            episode_len = player_stat.episode_len[game_id]
 
-            reward = self.eval_env.rewards[game_id, player_index].sum()
+            reward = player_stat.rewards[game_id, :episode_len].sum(0)
+            exploration = player_stat.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
+
             evaluation_rewards.append(reward)
-
-            episode_len = self.eval_env.episode_len[game_id]
-            explorations = self.eval_env.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
-            evaluation_explorations.append(explorations)
-
+            evaluation_explorations.append(exploration)
 
         wins = int(np.count_nonzero(np.array(evaluation_rewards) >= 1) / len(evaluation_rewards) * 100)
         mean_evaluation_reward = float(np.mean(evaluation_rewards))

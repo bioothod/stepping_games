@@ -1,3 +1,4 @@
+from collections import defaultdict
 import itertools
 import os
 
@@ -48,7 +49,12 @@ class Critic(nn.Module):
 
         start_index = 0
         while start_index < len(inputs):
-            batch = inputs[start_index : start_index + self.batch_size, ...]
+            rest = len(inputs) - (start_index + self.batch_size)
+            if rest < 10:
+                batch = inputs[start_index:, ...]
+            else:
+                batch = inputs[start_index:start_index+self.batch_size, ...]
+
             ret = self.forward_one(batch)
             return_values.append(ret)
 
@@ -98,7 +104,11 @@ class Actor(nn.Module):
 
         start_index = 0
         while start_index < len(inputs):
-            batch = inputs[start_index : start_index + self.batch_size, ...]
+            rest = len(inputs) - (start_index + self.batch_size)
+            if rest < 10:
+                batch = inputs[start_index:, ...]
+            else:
+                batch = inputs[start_index:start_index+self.batch_size, ...]
             ret = self.forward_one(batch)
             return_logits.append(ret)
 
@@ -149,13 +159,13 @@ class PPO(train_selfplay.BaseTrainer):
 
             'max_episode_len': 42,
 
-            'policy_optimization_steps': 5,
+            'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
-            'policy_stopping_kl': 0.2,
+            'policy_stopping_kl': 0.02,
 
-            'value_optimization_steps': 5,
+            'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
-            'value_stopping_mse': 0.2,
+            'value_stopping_mse': 0.01,
 
             'states_sampling_ratio': 3,
 
@@ -164,22 +174,25 @@ class PPO(train_selfplay.BaseTrainer):
             'gamma': 0.99,
             'tau': 0.97,
 
-            'init_lr': 1e-4,
+            'init_lr': 1e-5,
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
-            'num_features': 1024,
-            'hidden_dims': [256],
+            'num_features': 512,
+            'hidden_dims': [128],
 
             'max_gradient_norm': 1.0,
 
-            'num_training_games': 1024,
+            'num_training_games': 1024*2,
 
             'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
         self.config.tensorboard_log_dir = os.path.join(self.config.checkpoints_dir, 'tensorboard_logs')
+        first_run = True
+        if os.path.exists(self.config.tensorboard_log_dir) and len(os.listdir(self.config.tensorboard_log_dir)) > 0:
+            first_run = False
 
         #self.config.num_training_games = int(self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio / len(self.config.player_ids))
         def align(x, alignment):
@@ -204,7 +217,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.train_global_step = torch.zeros(1).long()
 
-        if not os.path.exists(os.path.join(self.config.checkpoints_dir, 'train.log')):
+        if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
             self.logger.info(f'critic:\n{print_networks("critic", self.critic, verbose=True)}')
 
@@ -221,8 +234,6 @@ class PPO(train_selfplay.BaseTrainer):
             eval_time = perf_counter() - eval_time_start
 
             self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, mean: {self.max_mean_eval_metric:.4f} evaluation time: {eval_time:.1f} sec')
-
-        #exit(0)
 
     def set_training_mode(self, training):
         self.actor.train(training)
@@ -259,7 +270,7 @@ class PPO(train_selfplay.BaseTrainer):
         actions = F.one_hot(actions, self.config.num_actions)
         return actions
 
-    def optimize_actor(self, states, actions, log_probs, gaes):
+    def optimize_actor(self, states, actions, log_probs, gaes, state_probs):
         num_samples = len(actions)
 
         policy_losses = []
@@ -270,6 +281,7 @@ class PPO(train_selfplay.BaseTrainer):
         total_sampled = 0
         for optimization_step in range(self.config.policy_optimization_steps):
             batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
+            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_batch = states[batch_indexes]
@@ -299,8 +311,8 @@ class PPO(train_selfplay.BaseTrainer):
             if min_total_loss is None or total_loss < min_total_loss:
                 min_total_loss = total_loss
 
-                if optimization_step < self.config.policy_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
-                    continue
+                #if optimization_step < self.config.policy_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
+                #    continue
 
             with torch.no_grad():
                 pred_log_probs_all, _ = self.actor.get_predictions(states, actions)
@@ -310,8 +322,8 @@ class PPO(train_selfplay.BaseTrainer):
                 if kl.item() > self.config.policy_stopping_kl:
                     break
 
-            if total_sampled >= len(states):
-                break
+            #if total_sampled >= len(states):
+            #    break
 
         mean_policy_loss = np.mean(policy_losses)
         mean_entropy_loss = np.mean(entropy_losses)
@@ -326,8 +338,6 @@ class PPO(train_selfplay.BaseTrainer):
         }, self.train_global_step)
 
         self.summary_writer.add_scalar('train_iterations/actor', len(total_losses), self.train_global_step)
-        self.summary_writer.add_scalar('train_iterations/samples', len(states), self.train_global_step)
-
 
         self.logger.debug(f'optimize_actor : '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
@@ -338,7 +348,7 @@ class PPO(train_selfplay.BaseTrainer):
                          f'kl: {mean_kl:.3f}, '
                          f'stopping_kl: {self.config.policy_stopping_kl}')
 
-    def optimize_critic(self, states, returns, values):
+    def optimize_critic(self, states, returns, values, state_probs):
         num_samples = len(states)
 
         value_losses = []
@@ -349,6 +359,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         for optimization_step in range(self.config.value_optimization_steps):
             batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
+            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_sampled = states[batch_indexes]
@@ -373,8 +384,8 @@ class PPO(train_selfplay.BaseTrainer):
             if min_total_loss is None or value_loss < min_total_loss:
                 min_total_loss = value_loss
 
-                if optimization_step < self.config.value_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
-                    continue
+                #if optimization_step < self.config.value_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
+                #    continue
 
             with torch.no_grad():
                 pred_values_all = self.critic(states)
@@ -388,8 +399,8 @@ class PPO(train_selfplay.BaseTrainer):
                 if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
                     break
 
-            if total_sampled >= len(states):
-                break
+            #if total_sampled >= len(states):
+            #    break
 
         mean_value_loss = np.mean(value_losses)
         mean_mse_values = np.mean(mse_values)
@@ -413,9 +424,8 @@ class PPO(train_selfplay.BaseTrainer):
                          f'stopping_mse: {self.config.value_stopping_mse}')
 
     def try_train(self):
+        self.set_training_mode(False)
         self.fill_episode_buffer()
-
-        self.set_training_mode(True)
 
         game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump()
 
@@ -431,33 +441,58 @@ class PPO(train_selfplay.BaseTrainer):
 
         gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
 
-        self.optimize_actor(states, actions, log_probs, gaes)
-        self.optimize_critic(states, returns, values)
+        if False:
+            unique_state_actions = defaultdict(float)
+            dist = []
+
+            unique_state_action_index = []
+            for i, (state, action) in enumerate(zip(states, actions)):
+                state_key = tuple(state.cpu().numpy().flatten().tolist())
+                action_key = tuple(action.cpu().numpy().flatten().tolist())
+
+                state_action_key = state_key + action_key
+                dist.append(state_action_key)
+
+                if state_action_key not in unique_state_actions:
+                    unique_state_action_index.append(i)
+
+                unique_state_actions[state_action_key] += 1.
+
+            dist = torch.tensor(dist).float()
+            self.summary_writer.add_histogram('train/state_action', dist, self.train_global_step, bins=100)
+            self.summary_writer.add_scalars('train_iterations/samples', {
+                'samples': len(states),
+                'unique_state_actions': len(unique_state_actions),
+            }, self.train_global_step)
+
+            index = torch.tensor(unique_state_action_index).long()
+            states = states[index]
+            actions = actions[index]
+            log_probs = log_probs[index]
+            gaes = gaes[index]
+            values = values[index]
+            returns = returns[index]
+
+            state_probs = np.ones(len(states), dtype=np.float32)
+            for i, (state, action) in enumerate(zip(states, actions)):
+                state_key = tuple(state.cpu().numpy().flatten().tolist())
+                action_key = tuple(action.cpu().numpy().flatten().tolist())
+
+                state_action_key = state_key + action_key
+                state_probs[i] = unique_state_actions[state_action_key]
+
+            state_probs /= state_probs.sum()
+        else:
+            state_probs = np.ones(len(states), dtype=np.float32)
+
+        self.set_training_mode(True)
+
+        self.optimize_actor(states, actions, log_probs, gaes, state_probs)
+        self.optimize_critic(states, returns, values, state_probs)
 
         self.train_global_step += 1
 
         return True
-
-    def make_single_step(self, player_id, game_index, states):
-        states = states.to(self.config.device)
-
-        with torch.no_grad():
-            self.actor.train(False)
-            actions, log_probs, explorations = self.actor.dist_actions(states)
-            self.actor.train(True)
-
-        new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
-
-        return edict({
-            'player_id': player_id,
-            'states': states,
-            'actions': actions,
-            'log_probs': log_probs,
-            'rewards': rewards,
-            'dones': dones,
-            'explorations': explorations,
-            'new_states': new_states,
-        })
 
     def make_single_step_and_save(self, player_id):
         game_index, states = self.train_env.current_states(player_id)
@@ -465,29 +500,30 @@ class PPO(train_selfplay.BaseTrainer):
             #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
+        states = states.to(self.config.device)
+        with torch.no_grad():
+            actions, log_probs, explorations = self.actor.dist_actions(states)
+
+        new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
+
         episode_len = self.train_env.episode_len[game_index]
+        truncated_indexes = torch.logical_and(episode_len + 1 == self.config.max_episode_len, dones != True)
+        dones[truncated_indexes] = 1
 
-        step = self.make_single_step(player_id, game_index, states)
+        next_values = torch.zeros(len(states), dtype=torch.float32)
+        if False:
+            if truncated_indexes.sum() > 0:
+                with torch.no_grad():
+                    next_truncated_states = new_states[truncated_indexes, ...]
+                    next_truncated_states = next_truncated_states.to(self.config.device)
+                    nv = self.critic(next_truncated_states).detach().cpu()
+                    next_values[truncated_indexes] = nv
 
-        truncated_indexes = torch.logical_and(episode_len + 1 == self.config.max_episode_len, step.dones != True)
-        step.dones[truncated_indexes] = 1
-
-        next_values = torch.zeros(len(step.states), dtype=torch.float32)
-        if truncated_indexes.sum() > 0:
-            with torch.no_grad():
-                next_truncated_states = step.new_states[truncated_indexes, ...]
-                next_truncated_states = next_truncated_states.to(self.config.device)
-                self.critic.train(False)
-                nv = self.critic(next_truncated_states).detach().cpu()
-                self.critic.train(True)
-                next_values[truncated_indexes] = nv
-
-        self.train_env.update_game_rewards(player_id, game_index, step.states, step.actions, step.log_probs, step.rewards, step.dones, step.explorations, next_values)
+        self.train_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, next_values, explorations)
 
     def make_step(self):
-        self.make_single_step_and_save(1)
-        self.make_single_step_and_save(2)
-
+        for player_id in self.config.player_ids:
+            self.make_single_step_and_save(player_id)
 
         if self.train_env.total_games_completed > self.config.num_games_to_stop_training_state_model:
             if self.actor.train_state_features:
@@ -502,7 +538,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
         winning_rate = float(self.max_eval_metric) / 100.
-        number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len * len(self.config.player_ids)
+        number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len
         number_of_states_or_requested_states = max(number_of_states, requested_states_size)
 
         completed_games = 0
@@ -527,7 +563,6 @@ class PPO(train_selfplay.BaseTrainer):
             'config_requested_states_size': requested_states_size,
             'winning_rate_number_of_states': number_of_states,
         }, self.train_global_step)
-
 
 def main():
     ppo = PPO()
