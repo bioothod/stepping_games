@@ -41,7 +41,7 @@ class Model(nn.Module):
             nn.ReLU(inplace=True),
             nn.BatchNorm2d(512),
         )
-        
+
         self.linear_encoder = nn.Sequential(
             nn.Flatten(),
         
