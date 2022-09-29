@@ -175,7 +175,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'num_training_games': 1024,
 
-            'batch_size': 1024*16,
+            'batch_size': 1024*14,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
