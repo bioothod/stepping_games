@@ -51,6 +51,9 @@ class AgentWrapper(nn.Module):
     def set_training_mode(self, mode):
         self.actor.train(mode)
 
+    def create_state(self, player_id, state):
+        return self.actor.create_state(player_id, state)
+
     def dist_actions(self, inputs):
         return self.actor.dist_actions(inputs)
 
