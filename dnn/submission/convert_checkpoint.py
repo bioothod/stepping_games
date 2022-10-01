@@ -12,3 +12,6 @@ def main():
     torch.save({
         'actor_state_dict': actor_checkpoint,
     }, FLAGS.output)
+
+if __name__ == '__main__':
+    main()
