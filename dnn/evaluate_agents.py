@@ -93,25 +93,6 @@ def main():
     logfile = os.path.join(evaluation_dir, 'evalution.log')
     logger = setup_logger('e', logfile=logfile, log_to_stdout=FLAGS.log_to_stdout)
 
-    config = edict({
-        'device': 'cpu',
-        'rows': 6,
-        'columns': 7,
-        'inarow': 4,
-        'player_ids': [1, 2],
-        'eval_seed': FLAGS.eval_seed,
-        'logfile': logfile,
-        'log_to_stdout': FLAGS.log_to_stdout,
-        'train_player_id': 1,
-
-        'gamma': 0.99,
-        'tau': 0.97,
-        'batch_size': 128,
-    })
-
-    config.actions = config.columns
-    config.max_episode_len = config.rows * config.columns
-
     summary_writer = EmptySummaryWriter()
     eval_global_step = torch.zeros(1).long()
 
@@ -122,14 +103,35 @@ def main():
         logger.critical(f'could not create an agent: {e}')
         exit(-1)
 
-    evaluation = evaluate.Evaluate(config, logger, FLAGS.num_evaluations, eval_agent, summary_writer, eval_global_step)
-    wins, evaluation_rewards = evaluation.evaluate(train_agent)
+    config = edict({
+        'device': 'cpu',
+        'rows': 6,
+        'columns': 7,
+        'inarow': 4,
+        'player_ids': [1, 2],
+        'eval_seed': FLAGS.eval_seed,
+        'logfile': logfile,
+        'log_to_stdout': FLAGS.log_to_stdout,
 
-    mean_evaluation_reward = np.mean(evaluation_rewards)
+        'gamma': 0.99,
+        'tau': 0.97,
+        'batch_size': 128,
+    })
 
-    logger.info(f'{FLAGS.train_agent} vs {FLAGS.eval_agent}: wins: {wins}, mean_evaluation_reward: {mean_evaluation_reward:.4f}')
+    config.actions = config.columns
+    config.max_episode_len = config.rows * config.columns
 
-    evaluation.close()
+    for train_player_id in config.player_ids:
+        config.train_player_id = train_player_id
+
+        evaluation = evaluate.Evaluate(config, logger, FLAGS.num_evaluations, eval_agent, summary_writer, eval_global_step)
+        wins, evaluation_rewards = evaluation.evaluate(train_agent)
+
+        mean_evaluation_reward = np.mean(evaluation_rewards)
+
+        logger.info(f'{FLAGS.train_agent} vs {FLAGS.eval_agent}: train_player_id: {train_player_id}, wins: {wins}, mean_evaluation_reward: {mean_evaluation_reward:.4f}')
+
+        evaluation.close()
 
 if __name__ == '__main__':
     main()
