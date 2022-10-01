@@ -10,6 +10,7 @@ import torch.nn as nn
 
 import evaluate
 from logger import setup_logger
+import mcts
 
 class EmptySummaryWriter:
     def __init__(self):
@@ -43,24 +44,26 @@ def create_actor(module_source_path, checkpoint_path):
     return actor
 
 class AgentWrapper(nn.Module):
-    def __init__(self, actor):
+    def __init__(self, player_id, logger, actor, mcts_impl):
         super().__init__()
 
+        self.logger = logger
+
+        self.real_actor = actor
         self.actor = actor
+        if mcts_impl:
+            self.actor = mcts.MCTSWrapper(player_id, actor, mcts_impl)
 
     def set_training_mode(self, mode):
-        self.actor.train(mode)
+        self.real_actor.train(mode)
 
     def create_state(self, player_id, state):
-        return self.actor.create_state(player_id, state)
+        return self.real_actor.create_state(player_id, state)
 
     def dist_actions(self, inputs):
         return self.actor.dist_actions(inputs)
 
-    def forward(self, inputs):
-        return self.actor.forward(inputs)
-
-def create_agent(name, logger):
+def create_agent(player_id, name, logger, mcts_impl):
     split = name.split(':')
     if len(split) != 3:
         raise ValueError(f'invalid agent name: {name}, format: name:module_path:checkpoint_path')
@@ -72,7 +75,7 @@ def create_agent(name, logger):
         return actor
 
     actor = create_actor(module_path, checkpoint_path)
-    agent = AgentWrapper(actor)
+    agent = AgentWrapper(player_id, logger, actor, mcts_impl)
     return agent
 
 def main():
@@ -82,6 +85,7 @@ def main():
     parser.add_argument('--evaluation_dir', type=str, required=True, help='Working directory')
     parser.add_argument('--num_evaluations', type=int, default=100, help='Number of evaluation runs')
     parser.add_argument('--log_to_stdout', action='store_true', help='Log evaluation data to stdout')
+    parser.add_argument('--mcts_steps', type=int, default=0, help='Wrap training agent into mcts tree search with this many rollouts per step')
     parser.add_argument('--eval_seed', type=int, default=555, help='Random seed for generators')
     FLAGS = parser.parse_args()
 
@@ -96,13 +100,6 @@ def main():
     summary_writer = EmptySummaryWriter()
     eval_global_step = torch.zeros(1).long()
 
-    try:
-        train_agent = create_agent(FLAGS.train_agent, logger)
-        eval_agent = create_agent(FLAGS.eval_agent, logger)
-    except Exception as e:
-        logger.critical(f'could not create an agent: {e}')
-        exit(-1)
-
     config = edict({
         'device': 'cpu',
         'rows': 6,
@@ -112,6 +109,7 @@ def main():
         'eval_seed': FLAGS.eval_seed,
         'logfile': logfile,
         'log_to_stdout': FLAGS.log_to_stdout,
+        'num_training_games': FLAGS.num_evaluations,
 
         'gamma': 0.99,
         'tau': 0.97,
@@ -121,8 +119,24 @@ def main():
     config.actions = config.columns
     config.max_episode_len = config.rows * config.columns
 
+    mcts_impl = None
+    if FLAGS.mcts_steps > 0:
+        mcts_impl = mcts.MCTSNaive(config, logger, FLAGS.mcts_steps)
+
     for train_player_id in config.player_ids:
         config.train_player_id = train_player_id
+
+        if train_player_id == 1:
+            eval_player_id = 2
+        else:
+            eval_player_id = 1
+
+        try:
+            train_agent = create_agent(train_player_id, FLAGS.train_agent, logger, mcts_impl)
+            eval_agent = create_agent(eval_player_id, FLAGS.eval_agent, logger, None)
+        except Exception as e:
+            logger.critical(f'could not create an agent: {e}')
+            raise
 
         evaluation = evaluate.Evaluate(config, logger, FLAGS.num_evaluations, eval_agent, summary_writer, eval_global_step)
         wins, evaluation_rewards = evaluation.evaluate(train_agent)
