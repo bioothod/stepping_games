@@ -93,14 +93,22 @@ class Actor(nn.Module):
         state_features = self.state_features_model(inputs)
         return state_features
 
-    def create_state(self, obs):
-        orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
-        state = orig_state.copy()
-        if obs['mark'] == 2:
+    def create_state(self, player_id, orig_state):
+        state = orig_state
+        if player_id == 2:
+            state = torch.zeros_like(orig_state)
             state[orig_state == 2] = 1
             state[orig_state == 1] = 2
 
         return state
+
+    def create_state_from_observation(self, obs):
+        orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
+
+        state = torch.from_numpy(orig_state)
+        player_id = obs['mark']
+
+        return self.create_state(player_id, state)
 
     def dist_actions(self, inputs):
         state_features = self.state_features(inputs)
@@ -121,7 +129,7 @@ class Actor(nn.Module):
         return actions
 
     def forward(self, observation):
-        state = self.create_state(observation)
+        state = self.create_state_from_observation(observation)
         state = torch.from_numpy(state)
 
         states = state.unsqueeze(0)
