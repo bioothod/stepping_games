@@ -3,7 +3,7 @@ import torch
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--original', type=str, required=True, help='Original checkpoint')
-parser.add_argument('--output', type=str, default='submission.ckpt', help='Output checkpoint path')
+parser.add_argument('--output', type=str, required=True, help='Output checkpoint path')
 FLAGS = parser.parse_args()
 
 def main():
