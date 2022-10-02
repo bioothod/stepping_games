@@ -74,24 +74,25 @@ class MCTSNaive:
                 states = states.to(self.config.device)
                 actions, log_probs, explorations = train_agent.dist_actions(states)
 
-                states, rewards, dones = self.env.step(player_id, game_index, actions)
-
+                new_states, rewards, dones = self.env.step(player_id, game_index, actions)
                 self.env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
+                #self.logger.info(f'player_id: {player_id}, game_index: {game_index}')
 
             running_index = self.env.running_index()
             if len(running_index) == 0:
                 break
 
+        player_stats = self.env.player_stats[train_player_id]
 
         max_actions = []
-
         rollout = defaultdict(float)
         items_in_rollout = 0
         for game_id in index:
-            player_stats = self.env.player_stats[train_player_id]
             episode_len = player_stats.episode_len[game_id]
+            rewards = player_stats.rewards[game_id, :episode_len]
 
-            reward = player_stats.rewards[game_id, :episode_len].sum()
+            self.logger.info(f'player_id: {train_player_id}, game_id: {game_id}, episode_len: {episode_len}, rewards: {rewards}')
+            reward = rewards[-1]
             action = player_stats.actions[game_id][0]
 
             rollout[action] += reward
