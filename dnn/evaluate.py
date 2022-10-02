@@ -6,8 +6,6 @@ from copy import deepcopy
 import numpy as np
 import torch
 
-import mcts
-
 def create_submission_agent(checkpoint_path):
     from submission.model import Actor as eval_agent_model
     from submission.model import default_config
@@ -196,6 +194,3 @@ class Evaluate:
         random.seed(self.eval_seed)
 
         return self.eval_obj.evaluate(train_agent)
-
-        mcts_agent = mcts.MCTSNaive(self.config.train_player_id, self.config, 10, train_agent)
-        return self.eval_obj.evaluate(mcts_agent)
