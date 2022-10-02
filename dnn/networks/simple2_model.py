@@ -27,7 +27,7 @@ class ConvBlockDouble(nn.Module):
 
     def forward(self, inputs):
         x = self.conv(inputs)
-        #x += inputs
+        x += inputs
         return x
 
 class Model(nn.Module):
