@@ -151,8 +151,8 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_simple3_ppo_8_eval_ppo_100_no_player_id',
-            'checkpoints_dir': 'checkpoints_simple3_ppo_8_eval_ppo_100_no_player_id',
+            'load_checkpoints_dir': 'checkpoints_simple3_ppo_9',
+            'checkpoints_dir': 'checkpoints_simple3_ppo_9',
             'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
@@ -178,15 +178,15 @@ class PPO(train_selfplay.BaseTrainer):
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
-            'num_features': 512,
-            'hidden_dims': [128],
+            'num_features': 1024,
+            'hidden_dims': [256],
 
             'max_gradient_norm': 1.0,
 
             'num_training_games': 1024*2,
 
             'batch_size': 1024*16,
-            'experience_buffer_to_batch_size_ratio': 2,
+            'experience_buffer_to_batch_size_ratio': 1.5,
         })
 
         self.config.tensorboard_log_dir = os.path.join(self.config.checkpoints_dir, 'tensorboard_logs')
@@ -204,7 +204,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple3_model.Model(config)
+            model = networks.simple2_model.Model(config)
             #model = networks.conv_model.Model(config)
             return model
 
@@ -538,7 +538,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.train_env.reset()
 
         requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
-        winning_rate = float(self.max_eval_metric) / 100.
+        winning_rate = float(self.max_eval_metric) / 100. * 1.5
         number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len
         number_of_states_or_requested_states = max(number_of_states, requested_states_size)
 
