@@ -217,8 +217,10 @@ class ConnectX:
 
     def set_index_state(self, index, states):
         self.games[index, ...] = states.to(self.games.device).detach().clone()
+        self.player_stats = {player_id:PlayerStats(self.num_rows, self.num_columns, self.num_games, self.max_episode_len, self.stat_device) for player_id in self.player_ids}
         self.dones = torch.ones_like(self.dones, dtype=torch.bool)
         self.dones[index] = False
+        self.episode_len[index] = 0
 
     def make_opposite(self, state):
         state_opposite = torch.zeros_like(state)
