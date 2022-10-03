@@ -7,7 +7,7 @@ from time import perf_counter
 
 import numpy as np
 import torch
-
+import torch.nn as nn
 
 import connectx_impl
 import networks
@@ -24,7 +24,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'load_checkpoints_dir': 'checkpoints_simple3_ppo_9',
             'checkpoints_dir': 'checkpoints_simple3_ppo_9',
-            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
 
@@ -128,18 +128,6 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic_opt.load_state_dict(checkpoint['critic_optimizer_state_dict'])
 
         self.logger.info(f'{self.name}: loaded checkpoint {checkpoint_path}')
-
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x, device=self.config.device, dtype=torch.float32)
-        return x
-
-    def __call__(self, states):
-        states = torch.from_numpy(states).to(self.config.device)
-        actions = self.actor.greedy_actions(states)
-        actions = F.one_hot(actions, self.config.num_actions)
-        return actions
 
     def optimize_actor(self, states, actions, log_probs, gaes, state_probs):
         num_samples = len(actions)
@@ -367,13 +355,13 @@ class PPO(train_selfplay.BaseTrainer):
         return True
 
     def make_single_step_and_save(self, player_id):
-        game_index, states = self.train_env.current_states(player_id)
-        if len(states) == 0:
+        game_index, game_states = self.train_env.current_states()
+        if len(game_index) == 0:
             #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
-        states = states.to(self.config.device)
         with torch.no_grad():
+            states = self.actor.create_state(player_id, game_states).to(self.config.device)
             actions, log_probs, explorations = self.actor.dist_actions(states)
 
         new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)

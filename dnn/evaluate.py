@@ -6,11 +6,16 @@ from copy import deepcopy
 import numpy as np
 import torch
 
-def create_submission_agent(checkpoint_path):
-    from submission.model import Actor as eval_agent_model
-    from submission.model import default_config
+def create_submission_agent(agent_template):
+    spl = agent_template.split(':')
+    if spl != 3:
+        raise ValueError(f'invalid temaplate string "{agent_template}", must have format feature_model_path:rl_model_path:checkpoint_path')
 
-    agent = eval_agent_model(default_config)
+    import sumbmission.utils as sub_utils
+
+    feature_model_path, rl_model_path, checkpoint_path = spl
+    config = sub_utils.select_config_from_feature_model(feature_model_path)
+    agent = sub_utils.create_actor(rl_model_path, feature_model_path, config, checkpoint_path)
 
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     agent.load_state_dict(checkpoint['actor_state_dict'])
@@ -124,17 +129,17 @@ class DNNEval:
 
         while True:
             for player_id in self.player_ids:
-                game_index, states = self.eval_env.current_states(player_id)
+                game_index, game_states = self.eval_env.current_states()
                 if len(game_index) == 0:
                     break
 
                 if player_id == self.train_player_id:
+                    states = train_agent.create_state(player_id, game_states)
                     states = states.to(self.device)
                     actions, log_probs, explorations = train_agent.actor.dist_actions(states)
                 else:
-                    eval_states = self.eval_env.games[game_index]
-                    eval_states = self.agent.create_state(player_id, eval_states)
-                    actions, log_probs, explorations = self.agent.dist_actions(eval_states)
+                    states = self.agent.create_state(player_id, game_states)
+                    actions, log_probs, explorations = self.agent.dist_actions(states)
 
                 states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 

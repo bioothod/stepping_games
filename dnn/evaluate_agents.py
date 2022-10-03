@@ -1,5 +1,4 @@
 import argparse
-import importlib
 import os
 
 from easydict import EasyDict as edict
@@ -11,6 +10,7 @@ import torch.nn as nn
 import evaluate
 from logger import setup_logger
 import mcts
+import submission.utils as sub_utils
 
 class EmptySummaryWriter:
     def __init__(self):
@@ -28,20 +28,6 @@ class EmptySummaryWriter:
         pass
     def add_audio(self, *args, **kwargs):
         pass
-
-def create_actor(module_source_path, checkpoint_path):
-    spec = importlib.util.spec_from_file_location('model', module_source_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    default_config = module.default_config
-
-    actor = module.Actor(default_config)
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    actor.load_state_dict(checkpoint['actor_state_dict'])
-    actor.train(False)
-
-    return actor
 
 class AgentWrapper(nn.Module):
     def __init__(self, player_id, logger, actor, mcts_impl):
@@ -65,16 +51,17 @@ class AgentWrapper(nn.Module):
 
 def create_agent(player_id, name, logger, mcts_impl):
     split = name.split(':')
-    if len(split) != 3:
-        raise ValueError(f'invalid agent name: {name}, format: name:module_path:checkpoint_path')
+    if len(split) != 4:
+        raise ValueError(f'invalid agent name: {name}, format: name:feature_model_path:rl_model_path:checkpoint_path')
 
-    agent_name, module_path, checkpoint_path = split
-    if len(module_path) == 0:
+    agent_name, feature_model_path, rl_model_path, checkpoint_path = split
+    if len(feature_model_path) == 0:
         actor = agent_name
         logger.info(f'using builtin agent \'{agent_name}\'')
         return actor
 
-    actor = create_actor(module_path, checkpoint_path)
+    config = sub_utils.select_config_from_feature_model(feature_model_path)
+    actor = sub_utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
     agent = AgentWrapper(player_id, logger, actor, mcts_impl)
     return agent
 

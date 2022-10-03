@@ -222,24 +222,11 @@ class ConnectX:
         self.dones[index] = False
         self.episode_len[index] = 0
 
-    def make_opposite(self, state):
-        state_opposite = torch.zeros_like(state)
-        state_opposite[state == 1] = 2
-        state_opposite[state == 2] = 1
-        return state_opposite
-
-    def make_states(self, player_id, game_states):
-        if player_id == 2:
-            game_states = self.make_opposite(game_states)
-
-        return game_states
-
-    def current_states(self, player_id):
+    def current_states(self):
         game_index = self.running_index()
         games = self.games[game_index].detach().clone()
 
-        states = self.make_states(player_id, games)
-        return game_index, states
+        return game_index, games
 
     def running_index(self):
         index = torch.arange(len(self.games))
@@ -425,8 +412,7 @@ class ConnectX:
         games, rewards, dones = step_games(games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
         self.games[game_index] = games.detach().clone()
 
-        states = self.make_states(player_id, games)
-        return states, rewards, dones
+        return games.detach().clone(), rewards, dones
 
     def close(self):
         pass
