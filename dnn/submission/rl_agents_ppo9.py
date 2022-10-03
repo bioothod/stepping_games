@@ -91,6 +91,17 @@ class Actor(nn.Module):
 
         return state
 
+    def create_game_from_state(self, player_id, states):
+        games = torch.zeros([len(states)] + self.observation_shape, dtype=torch.float32)
+        if player_id == 1:
+            games[states == 1] = 1
+            games[states == 2] = 2
+        else:
+            games[states == 2] = 1
+            games[states == 1] = 2
+
+        return games
+
     def create_state_from_observation(self, obs):
         orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
 
