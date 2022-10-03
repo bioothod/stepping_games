@@ -1,18 +1,52 @@
 import importlib
 import os
 
+from copy import deepcopy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model import default_config
+default_config = {
+    'checkpoint_path': 'submission.ckpt',
+    'rows': 6,
+    'columns': 7,
+    'inarow': 4,
+    'num_actions': 7,
+    'batch_size': 128,
+}
 
-def create_actor(module_source_path, config, checkpoint_path):
-    spec = importlib.util.spec_from_file_location('model', module_source_path)
+config_ppo6 = deepcopy(default_config)
+config_ppo6.update({
+    'num_features': 512,
+    'hidden_dims': [128],
+})
+config_ppo8 = deepcopy(default_config)
+config_ppo8.update({
+    'num_features': 512,
+    'hidden_dims': [128],
+})
+config_ppo9 = deepcopy(default_config)
+config_ppo9.update({
+    'num_features': 1024,
+    'hidden_dims': [256],
+})
+
+def load_module_from_source(source_path):
+    spec = importlib.util.spec_from_file_location('model', source_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
 
-    actor = module.Actor(config)
+def create_actor(actor_source_path, feature_model_source_path, config, checkpoint_path):
+    feature_module = load_module_from_source(feature_model_source_path)
+
+    def feature_model_creation_func(config):
+        return feature_module.Model(config)
+
+    actor_module = load_module_from_source(actor_source_path)
+    actor = actor_module.Actor(config, feature_model_creation_func)
+
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     actor.load_state_dict(checkpoint['actor_state_dict'])
     actor.train(False)
@@ -20,29 +54,28 @@ def create_actor(module_source_path, config, checkpoint_path):
     return actor
 
 class CombinedModel(nn.Module):
-    def __init__(self, config, is_local):
-        self.num_actions = config['columns']
+    def __init__(self, is_local):
+        self.num_actions = default_config['columns']
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('model.py', 'submission.ckpt'),
-            ('model.py', 'submission_8_ppo56.ckpt'),
+            ('rl_agents_ppo9.py', 'feature_model_ppo9.py', 'submission_9_ppo79.ckpt', config_ppo9),
         ]
 
         self.actors = []
-        for model_path, checkpoint_path in model_paths:
+        for rl_model_path, feature_model_path, checkpoint_path, config in model_paths:
             if not is_local:
-                model_path = os.path.join(kaggle_prefix, model_path)
+                rl_model_path = os.path.join(kaggle_prefix, rl_model_path)
+                feature_model_path = os.path.join(kaggle_prefix, feature_model_path)
                 checkpoint_path = os.path.join(kaggle_prefix, checkpoint_path)
 
-            actor = create_actor(model_path, config, checkpoint_path)
+            actor = create_actor(rl_model_path, feature_model_path, config, checkpoint_path)
             self.actors.append(actor)
 
-    def forward(self, observation):
+    def forward_from_observation(self, observation):
         all_probs = torch.ones((1, self.num_actions), dtype=torch.float32)
         for actor in self.actors:
-            state = actor.create_state(observation)
-            state = torch.from_numpy(state)
+            state = actor.create_state_from_observation(observation)
             states = state.unsqueeze(0)
 
             state_features = actor.state_features(states)
@@ -56,11 +89,12 @@ class CombinedModel(nn.Module):
 
 want_test = os.environ.get('RUN_KAGGLE_TEST')
 
-actor = CombinedModel(default_config, want_test)
+actor = CombinedModel(want_test)
 
 if want_test:
     import kaggle_environments as kaggle
     env = kaggle.make('connectx')
+    player_id = 1
     game = env.train([None, 'random'])
 
     from time import perf_counter
@@ -69,19 +103,20 @@ if want_test:
     steps = 0
 
     for game_idx in range(100):
-        state = game.reset()
+        observation = game.reset()
 
         for i in range(100):
-            action = actor.forward(state)
-            state, reward, done, info = game.step(action)
+            action = actor.forward_from_observation(observation)
+            observation, reward, done, info = game.step(action)
             steps += 1
             if done:
                 break
 
     game_time = perf_counter() - start_time
-    rps = game_time / steps
-    print(rps)
+    time_per_step_ms = game_time / steps * 1000
+
+    print(f'time_per_step_ms: {time_per_step_ms:.1f}')
 
 def my_agent(observation, config):
-    action = actor.forward(observation)
+    action = actor.forward_from_observation(observation)
     return action
