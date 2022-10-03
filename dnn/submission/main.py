@@ -1,65 +1,18 @@
-import importlib
 import os
-
-from copy import deepcopy
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-default_config = {
-    'checkpoint_path': 'submission.ckpt',
-    'rows': 6,
-    'columns': 7,
-    'inarow': 4,
-    'num_actions': 7,
-    'batch_size': 128,
-}
-
-config_ppo6 = deepcopy(default_config)
-config_ppo6.update({
-    'num_features': 512,
-    'hidden_dims': [128],
-})
-config_ppo8 = deepcopy(default_config)
-config_ppo8.update({
-    'num_features': 512,
-    'hidden_dims': [128],
-})
-config_ppo9 = deepcopy(default_config)
-config_ppo9.update({
-    'num_features': 1024,
-    'hidden_dims': [256],
-})
-
-def load_module_from_source(source_path):
-    spec = importlib.util.spec_from_file_location('model', source_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-def create_actor(actor_source_path, feature_model_source_path, config, checkpoint_path):
-    feature_module = load_module_from_source(feature_model_source_path)
-
-    def feature_model_creation_func(config):
-        return feature_module.Model(config)
-
-    actor_module = load_module_from_source(actor_source_path)
-    actor = actor_module.Actor(config, feature_model_creation_func)
-
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    actor.load_state_dict(checkpoint['actor_state_dict'])
-    actor.train(False)
-
-    return actor
+import utils
 
 class CombinedModel(nn.Module):
     def __init__(self, is_local):
-        self.num_actions = default_config['columns']
+        self.num_actions = utils.default_config['columns']
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('rl_agents_ppo9.py', 'feature_model_ppo9.py', 'submission_9_ppo79.ckpt', config_ppo9),
+            ('rl_agents_ppo9.py', 'feature_model_ppo9.py', 'submission_9_ppo79.ckpt', utils.config_ppo9),
         ]
 
         self.actors = []
@@ -69,7 +22,7 @@ class CombinedModel(nn.Module):
                 feature_model_path = os.path.join(kaggle_prefix, feature_model_path)
                 checkpoint_path = os.path.join(kaggle_prefix, checkpoint_path)
 
-            actor = create_actor(rl_model_path, feature_model_path, config, checkpoint_path)
+            actor = utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
             self.actors.append(actor)
 
     def forward_from_observation(self, observation):
