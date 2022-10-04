@@ -12,7 +12,8 @@ class CombinedModel(nn.Module):
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('rl_agents_ppo9.py', 'feature_model_ppo9.py', 'submission_9_ppo79.ckpt', utils.config_ppo9),
+            ('rl_agents_ppo6.py', 'feature_model_ppo6.py', 'submission_6_ppo100.ckpt', utils.config_ppo6),
+            ('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo72_multichannel.ckpt', utils.config_ppo9_multichannel),
         ]
 
         self.actors = []
