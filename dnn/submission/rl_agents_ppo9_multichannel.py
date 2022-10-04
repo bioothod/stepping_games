@@ -124,9 +124,12 @@ class Actor(nn.Module):
         orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
 
         state = torch.from_numpy(orig_state)
+        states = state.unsqueeze(0)
         player_id = obs['mark']
 
-        return self.create_state(player_id, state)
+        states = self.create_state(player_id, states)
+        states = states.squeeze(0)
+        return states
 
     def forward_one(self, inputs):
         if self.train_state_features:
