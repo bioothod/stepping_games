@@ -11,7 +11,7 @@ class Critic(nn.Module):
         self.batch_size = config['batch_size']
         self.state_features_model = state_features_model
 
-        hidden_dims = [config['num_features']] + config['hidden_dims'] + [config['num_actions']]
+        hidden_dims = [config['num_features']] + config['hidden_dims'] + [1]
 
         modules = []
 
