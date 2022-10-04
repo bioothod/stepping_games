@@ -29,6 +29,9 @@ class MCTSWrapper(nn.Module):
 
         return mcts_actions_probs
 
+    def create_state(self, player_id, game_states):
+        return self.agent.create_state(player_id, game_states)
+
     def greedy_actions(self, states):
         return self.actions(states)
 
@@ -75,6 +78,7 @@ class MCTSNaive:
         local_config = deepcopy(config)
         local_config.num_training_games = self.num_games
         local_config.device = 'cpu'
+
         self.env = connectx_impl.ConnectX(local_config, critic=None, summary_writer=None, summary_prefix='', global_step=None)
 
     def run(self, train_player_id, train_agent, initial_game_states):
@@ -98,6 +102,8 @@ class MCTSNaive:
                 actions, log_probs, explorations = train_agent.dist_actions(states)
 
                 new_states, rewards, dones = self.env.step(player_id, game_index, actions)
+                # in the line above 'new_states' becomes game state, we should save previous state here, but since it will not be used, we can save a new state instead
+                states = new_states
                 self.env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
 
             running_index = self.env.running_index()
