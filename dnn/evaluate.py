@@ -141,8 +141,10 @@ class DNNEval:
                     states = self.agent.create_state(player_id, game_states)
                     actions, log_probs, explorations = self.agent.dist_actions(states)
 
-                states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
+                new_states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
+                # in the line above 'new_states' becomes game state, we should save previous state here, but since it will not be used, we can save a new state instead
+                states = new_states
                 self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
 
             completed_index = self.eval_env.completed_index()
