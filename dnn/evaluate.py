@@ -8,14 +8,14 @@ import torch
 
 def create_submission_agent(agent_template):
     spl = agent_template.split(':')
-    if spl != 3:
+    if len(spl) != 3:
         raise ValueError(f'invalid temaplate string "{agent_template}", must have format feature_model_path:rl_model_path:checkpoint_path')
 
-    import sumbmission.utils as sub_utils
+    import submission.utils as sub_utils
 
     feature_model_path, rl_model_path, checkpoint_path = spl
     config = sub_utils.select_config_from_feature_model(feature_model_path)
-    agent = sub_utils.create_actor(rl_model_path, feature_model_path, config, checkpoint_path)
+    agent = sub_utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
 
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     agent.load_state_dict(checkpoint['actor_state_dict'])
@@ -134,7 +134,7 @@ class DNNEval:
                     break
 
                 if player_id == self.train_player_id:
-                    states = train_agent.create_state(player_id, game_states)
+                    states = train_agent.actor.create_state(player_id, game_states)
                     states = states.to(self.device)
                     actions, log_probs, explorations = train_agent.actor.dist_actions(states)
                 else:
