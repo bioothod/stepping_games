@@ -11,6 +11,7 @@ default_config = {
     'inarow': 4,
     'num_actions': 7,
     'batch_size': 128,
+    'player_ids': [1, 2],
 }
 
 config_ppo6 = deepcopy(default_config)
@@ -28,6 +29,11 @@ config_ppo9.update({
     'num_features': 1024,
     'hidden_dims': [256],
 })
+config_ppo9_multichannel = deepcopy(default_config)
+config_ppo9_multichannel.update({
+    'num_features': 512,
+    'hidden_dims': [128],
+})
 
 def select_config_from_feature_model(feature_model_path):
     if feature_model_path.endswith('ppo6.py'):
@@ -36,6 +42,8 @@ def select_config_from_feature_model(feature_model_path):
         config = config_ppo8
     elif feature_model_path.endswith('ppo9.py'):
         config = config_ppo9
+    elif feature_model_path.endswith('ppo9_multichannel.py'):
+        config = config_ppo9_multichannel
     else:
         raise ValueError(f'there is no matching config for the feature model path {feature_model_path}, please check how the name ends, it should end with ppo6.py or something similar')
 
