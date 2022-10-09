@@ -27,17 +27,19 @@ class ConvBlockDouble(nn.Module):
 
     def forward(self, inputs):
         x = self.conv(inputs)
-        #x += inputs
+        x += inputs
         return x
 
 class Model(nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.config = config
+        rows = config['rows']
+        columns = config['columns']
+        num_features = config['num_features']
 
         num_output_conv_features = 1024
-        num_input_linear_features = num_output_conv_features * (self.config.rows - 3) * self.config.columns
+        num_input_linear_features = num_output_conv_features * (rows - 3) * columns
 
         self.conv_encoder = nn.Sequential(
             ConvBlockSingle(1, 3, 1),
@@ -59,9 +61,9 @@ class Model(nn.Module):
         self.linear_encoder = nn.Sequential(
             nn.Flatten(),
         
-            nn.Linear(num_input_linear_features, self.config.num_features),
+            nn.Linear(num_input_linear_features, num_features),
             nn.ReLU(inplace=True),
-            nn.BatchNorm1d(self.config.num_features),
+            nn.BatchNorm1d(num_features),
         )
 
     def forward(self, inputs):

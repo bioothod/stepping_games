@@ -216,39 +216,16 @@ class ConnectX:
 
     def set_index_state(self, index, states):
         self.games[index, ...] = states.to(self.games.device).detach().clone()
+        self.player_stats = {player_id:PlayerStats(self.num_rows, self.num_columns, self.num_games, self.max_episode_len, self.stat_device) for player_id in self.player_ids}
         self.dones = torch.ones_like(self.dones, dtype=torch.bool)
+        self.episode_len = torch.zeros(self.num_games, device=self.stat_device).long()
         self.dones[index] = False
 
-
-    def make_opposite(self, state):
-        state_opposite = torch.zeros_like(state)
-        state_opposite[state == 1] = 2
-        state_opposite[state == 2] = 1
-        return state_opposite
-
-    def make_states(self, player_id, game_states):
-        if player_id == 2:
-            game_states = self.make_opposite(game_states)
-
-        num_games = len(game_states)
-
-        states = torch.zeros((1 + len(self.player_ids), num_games, self.num_rows, self.num_columns), dtype=torch.float32)
-        empty_idx = game_states[:, 0, ...] == 0
-        states[0, empty_idx] = 1
-
-        for idx, pid in enumerate(self.player_ids):
-            player_idx = game_states[:, 0, ...] == pid
-            states[idx + 1, player_idx] = 1
-
-        states = states.transpose(1, 0)
-        return states
-
-    def current_states(self, player_id):
+    def current_states(self):
         game_index = self.running_index()
         games = self.games[game_index].detach().clone()
 
-        states = self.make_states(player_id, games)
-        return game_index, states
+        return game_index, games
 
     def running_index(self):
         index = torch.arange(len(self.games))
@@ -433,8 +410,7 @@ class ConnectX:
         games, rewards, dones = step_games(games, player_id, actions, self.num_rows, self.num_columns, self.inarow)
         self.games[game_index] = games.detach().clone()
 
-        states = self.make_states(player_id, games)
-        return states, rewards, dones
+        return games.detach().clone(), rewards, dones
 
     def close(self):
         pass

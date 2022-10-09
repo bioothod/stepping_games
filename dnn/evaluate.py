@@ -6,13 +6,16 @@ from copy import deepcopy
 import numpy as np
 import torch
 
-#import mcts
+def create_submission_agent(agent_template):
+    spl = agent_template.split(':')
+    if len(spl) != 3:
+        raise ValueError(f'invalid temaplate string "{agent_template}", must have format feature_model_path:rl_model_path:checkpoint_path')
 
-def create_submission_agent(checkpoint_path):
-    from submission.model_ppo6 import Actor as eval_agent_model
-    from submission.model_ppo6 import default_config
+    import submission.utils as sub_utils
 
-    agent = eval_agent_model(default_config)
+    feature_model_path, rl_model_path, checkpoint_path = spl
+    config = sub_utils.select_config_from_feature_model(feature_model_path)
+    agent = sub_utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
 
     checkpoint = torch.load(checkpoint_path, map_location='cpu')
     agent.load_state_dict(checkpoint['actor_state_dict'])
@@ -126,21 +129,22 @@ class DNNEval:
 
         while True:
             for player_id in self.player_ids:
-                game_index, states = self.eval_env.current_states(player_id)
+                game_index, game_states = self.eval_env.current_states()
                 if len(game_index) == 0:
                     break
 
                 if player_id == self.train_player_id:
+                    states = train_agent.actor.create_state(player_id, game_states)
                     states = states.to(self.device)
                     actions, log_probs, explorations = train_agent.actor.dist_actions(states)
                 else:
-                    eval_states = self.eval_env.games[game_index]
-                    if player_id == 2:
-                        eval_states = self.eval_env.make_opposite(eval_states)
-                    actions, log_probs, explorations = self.agent.dist_actions(eval_states)
+                    states = self.agent.create_state(player_id, game_states)
+                    actions, log_probs, explorations = self.agent.dist_actions(states)
 
-                states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
+                new_states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
+                # in the line above 'new_states' becomes game state, we should save previous state here, but since it will not be used, we can save a new state instead
+                states = new_states
                 self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
 
             completed_index = self.eval_env.completed_index()
@@ -197,6 +201,3 @@ class Evaluate:
         random.seed(self.eval_seed)
 
         return self.eval_obj.evaluate(train_agent)
-
-        mcts_agent = mcts.MCTSNaive(self.config.train_player_id, self.config, 10, train_agent)
-        return self.eval_obj.evaluate(mcts_agent)

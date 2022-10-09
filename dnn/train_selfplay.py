@@ -50,11 +50,11 @@ class BaseTrainer:
         self.max_eval_metric = 0.0
         self.max_mean_eval_metric = -float('inf')
 
-        eval_checkpoint_path = config.get('eval_checkpoint_path')
-        if eval_checkpoint_path:
-            self.eval_agent_name = eval_checkpoint_path
+        eval_agent_template = config.get('eval_agent_template')
+        if eval_agent_template:
+            self.eval_agent_name = eval_agent_template
 
-            eval_agent = evaluate.create_submission_agent(eval_checkpoint_path)
+            eval_agent = evaluate.create_submission_agent(eval_agent_template)
             self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.eval_global_step)
         else:
             self.eval_agent_name = 'negamax'

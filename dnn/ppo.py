@@ -8,152 +8,23 @@ from time import perf_counter
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 import connectx_impl
 import networks
 from print_networks import print_networks
+from rl_agents import Actor, Critic
 import train_selfplay
 
-
-class Critic(nn.Module):
-    def __init__(self, config, state_features_model):
-        super().__init__()
-
-        self.batch_size = config.batch_size
-        self.state_features_model = state_features_model
-
-        hidden_dims = [config.num_features] + config.hidden_dims + [1]
-        modules = []
-
-        for i in range(1, len(hidden_dims)):
-            input_dim = hidden_dims[i-1]
-            output_dim = hidden_dims[i]
-
-            l = nn.Linear(input_dim, output_dim)
-            modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
-
-        self.values = nn.Sequential(*modules)
-
-    def forward_one(self, inputs):
-        with torch.no_grad():
-            states_features = self.state_features_model(inputs)
-
-        v = self.values(states_features)
-        v = v.squeeze(1)
-        return v
-
-    def forward(self, inputs):
-        return_values = []
-
-        start_index = 0
-        while start_index < len(inputs):
-            rest = len(inputs) - (start_index + self.batch_size)
-            if rest < 10:
-                batch = inputs[start_index:, ...]
-            else:
-                batch = inputs[start_index:start_index+self.batch_size, ...]
-
-            ret = self.forward_one(batch)
-            return_values.append(ret)
-
-            start_index += len(batch)
-
-        return_values = torch.cat(return_values, 0)
-        return return_values
-
-class Actor(nn.Module):
-    def __init__(self, config, feature_model_creation_func):
-        super().__init__()
-
-        self.batch_size = config.batch_size
-
-        self.train_state_features = True
-        self.state_features_model = feature_model_creation_func(config)
-
-        hidden_dims = [config.num_features] + config.hidden_dims + [config.num_actions]
-        modules = []
-
-        for i in range(1, len(hidden_dims)):
-            input_dim = hidden_dims[i-1]
-            output_dim = hidden_dims[i]
-
-            l = nn.Linear(input_dim, output_dim)
-            modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
-
-        self.features = nn.Sequential(*modules)
-
-    def state_features(self, inputs):
-        state_features = self.state_features_model(inputs)
-        return state_features
-
-    def forward_one(self, inputs):
-        if self.train_state_features:
-            state_features = self.state_features(inputs)
-        else:
-            with torch.no_grad():
-                state_features = self.state_features(inputs)
-
-        outputs = self.features(state_features)
-        return outputs
-
-    def forward(self, inputs):
-        return_logits = []
-
-        start_index = 0
-        while start_index < len(inputs):
-            rest = len(inputs) - (start_index + self.batch_size)
-            if rest < 10:
-                batch = inputs[start_index:, ...]
-            else:
-                batch = inputs[start_index:start_index+self.batch_size, ...]
-            ret = self.forward_one(batch)
-            return_logits.append(ret)
-
-            start_index += len(batch)
-
-        return_logits = torch.cat(return_logits, 0)
-        return return_logits
-
-    def dist_actions(self, inputs):
-        logits = self.forward(inputs)
-        dist = torch.distributions.Categorical(logits=logits)
-        actions = dist.sample()
-
-        log_prob = dist.log_prob(actions)
-
-        is_exploratory = actions != torch.argmax(logits, axis=1)
-        return actions, log_prob, is_exploratory
-
-    def select_actions(self, states):
-        logits = self.forward(states)
-        dist = torch.distributions.Categorical(logits=logits)
-        actions = dist.sample()
-        return actions
-
-    def get_predictions(self, states, actions):
-        logits = self.forward(states)
-        dist = torch.distributions.Categorical(logits=logits)
-        log_prob = dist.log_prob(actions)
-        entropies = dist.entropy()
-        return log_prob, entropies
-
-    def greedy_actions(self, states):
-        logits = self.forward(states)
-        actions = torch.argmax(logits, 1)
-        return actions
 
 class PPO(train_selfplay.BaseTrainer):
     def __init__(self):
         self.config = edict({
             'player_ids': [1, 2],
             'train_player_id': 1,
-            
+
             'load_checkpoints_dir': 'checkpoints_simple3_ppo_9',
             'checkpoints_dir': 'checkpoints_simple3_ppo_9',
-            'eval_checkpoint_path': 'checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
 
@@ -178,14 +49,14 @@ class PPO(train_selfplay.BaseTrainer):
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
-            'num_features': 512,
-            'hidden_dims': [128],
+            'num_features': 1024,
+            'hidden_dims': [256],
 
             'max_gradient_norm': 1.0,
 
             'num_training_games': 1024*2,
 
-            'batch_size': 1024*14,
+            'batch_size': 1024*8,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
@@ -204,7 +75,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple3_model.Model(config)
+            model = networks.simple2_model.Model(config)
             #model = networks.conv_model.Model(config)
             return model
 
@@ -257,18 +128,6 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic_opt.load_state_dict(checkpoint['critic_optimizer_state_dict'])
 
         self.logger.info(f'{self.name}: loaded checkpoint {checkpoint_path}')
-
-    def _format(self, state):
-        x = state
-        if not isinstance(x, torch.Tensor):
-            x = torch.tensor(x, device=self.config.device, dtype=torch.float32)
-        return x
-
-    def __call__(self, states):
-        states = torch.from_numpy(states).to(self.config.device)
-        actions = self.actor.greedy_actions(states)
-        actions = F.one_hot(actions, self.config.num_actions)
-        return actions
 
     def optimize_actor(self, states, actions, log_probs, gaes, state_probs):
         num_samples = len(actions)
@@ -495,13 +354,13 @@ class PPO(train_selfplay.BaseTrainer):
         return True
 
     def make_single_step_and_save(self, player_id):
-        game_index, states = self.train_env.current_states(player_id)
-        if len(states) == 0:
+        game_index, game_states = self.train_env.current_states()
+        if len(game_index) == 0:
             #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
-        states = states.to(self.config.device)
         with torch.no_grad():
+            states = self.actor.create_state(player_id, game_states).to(self.config.device)
             actions, log_probs, explorations = self.actor.dist_actions(states)
 
         new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
@@ -537,7 +396,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.train_env.reset()
 
         requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
-        winning_rate = float(self.max_eval_metric) / 100.
+        winning_rate = float(self.max_eval_metric) / 100. * 1.5
         number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len
         number_of_states_or_requested_states = max(number_of_states, requested_states_size)
 
