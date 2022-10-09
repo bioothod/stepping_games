@@ -15,12 +15,7 @@ def create_submission_agent(agent_template):
 
     feature_model_path, rl_model_path, checkpoint_path = spl
     config = sub_utils.select_config_from_feature_model(feature_model_path)
-    agent = sub_utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
-
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    agent.load_state_dict(checkpoint['actor_state_dict'])
-
-    agent.train(False)
+    agent, _ = sub_utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic=False)
 
     return agent
 
@@ -117,7 +112,7 @@ class DNNEval:
 
         config = deepcopy(config)
         config.num_training_games = num_evaluations
-        self.eval_env = connectx_impl.ConnectX(config, None, self.summary_writer, 'eval', self.global_step)
+        self.eval_env = connectx_impl.ConnectX(config)
 
     def close(self):
         self.eval_env.close()
@@ -134,18 +129,13 @@ class DNNEval:
                     break
 
                 if player_id == self.train_player_id:
-                    states = train_agent.actor.create_state(player_id, game_states)
-                    states = states.to(self.device)
-                    actions, log_probs, explorations = train_agent.actor.dist_actions(states)
+                    actions, log_probs, explorations = train_agent.actor.dist_actions(player_id, game_states)
                 else:
-                    states = self.agent.create_state(player_id, game_states)
-                    actions, log_probs, explorations = self.agent.dist_actions(states)
+                    actions, log_probs, explorations = self.agent.dist_actions(player_id, game_states)
 
-                new_states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
+                new_game_states, rewards, dones = self.eval_env.step(player_id, game_index, actions)
 
-                # in the line above 'new_states' becomes game state, we should save previous state here, but since it will not be used, we can save a new state instead
-                states = new_states
-                self.eval_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
+                self.eval_env.update_game_rewards(player_id, game_index, game_states, actions, log_probs, rewards, dones, torch.zeros_like(rewards), explorations)
 
             completed_index = self.eval_env.completed_index()
             if len(completed_index) >= self.num_evaluations:
