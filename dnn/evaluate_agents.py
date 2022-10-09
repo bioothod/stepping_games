@@ -2,6 +2,7 @@ import argparse
 import os
 
 from easydict import EasyDict as edict
+from copy import deepcopy
 
 import numpy as np
 import torch
@@ -9,7 +10,7 @@ import torch.nn as nn
 
 import evaluate
 from logger import setup_logger
-import mcts
+from mcts_value import Runner
 import submission.utils as sub_utils
 
 class EmptySummaryWriter:
@@ -30,29 +31,35 @@ class EmptySummaryWriter:
         pass
 
 class AgentWrapper(nn.Module):
-    def __init__(self, player_id, logger, actor, mcts_impl):
+    def __init__(self, player_id, config, logger, actor, critic, mcts_steps):
         super().__init__()
 
         self.logger = logger
 
         self.real_actor = actor
         self.actor = actor
-        if mcts_impl:
-            self.actor = mcts.MCTSWrapper(player_id, actor, mcts_impl)
+        self.critic = critic
+
+        if mcts_steps > 0:
+            self.actor = Runner(config, player_id, actor, critic, logger)
 
     def set_training_mode(self, mode):
         self.real_actor.train(mode)
 
-    def create_state(self, player_id, state):
-        return self.real_actor.create_state(player_id, state)
+    def create_state(self, player_id, game_state):
+        return self.real_actor.create_state(player_id, game_state)
 
     def dist_actions(self, inputs):
         return self.actor.dist_actions(inputs)
 
-def create_agent(player_id, name, logger, mcts_impl):
+def create_agent(player_id, global_config, name, logger, mcts_steps):
     split = name.split(':')
     if len(split) != 4:
         raise ValueError(f'invalid agent name: {name}, format: name:feature_model_path:rl_model_path:checkpoint_path')
+
+    create_critic = False
+    if mcts_steps > 0:
+        create_critic = True
 
     agent_name, feature_model_path, rl_model_path, checkpoint_path = split
     if len(feature_model_path) == 0:
@@ -60,9 +67,12 @@ def create_agent(player_id, name, logger, mcts_impl):
         logger.info(f'using builtin agent \'{agent_name}\'')
         return actor
 
-    config = sub_utils.select_config_from_feature_model(feature_model_path)
-    actor = sub_utils.create_actor(feature_model_path, rl_model_path, config, checkpoint_path)
-    agent = AgentWrapper(player_id, logger, actor, mcts_impl)
+    config = deepcopy(global_config)
+    local_config = sub_utils.select_config_from_feature_model(feature_model_path)
+    config.update(local_config)
+
+    actor, critic = sub_utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic)
+    agent = AgentWrapper(player_id, config, logger, actor, critic, mcts_steps)
     return agent
 
 def main():
@@ -101,14 +111,19 @@ def main():
         'gamma': 0.99,
         'tau': 0.97,
         'batch_size': 128,
+
+        'num_simulations': FLAGS.mcts_steps,
+        'mcts_c1': 1.25,
+        'mcts_c2': 19652,
+        'mcts_discount': 0.99,
+        'add_exploration_noise': False,
+        'root_dirichlet_alpha': 0.3,
+        'root_exploration_fraction': 0.25,
+
     })
 
     config.actions = config.columns
     config.max_episode_len = config.rows * config.columns
-
-    mcts_impl = None
-    if FLAGS.mcts_steps > 0:
-        mcts_impl = mcts.MCTSNaive(config, logger, FLAGS.mcts_steps)
 
     for train_player_id in config.player_ids:
         config.train_player_id = train_player_id
@@ -119,8 +134,8 @@ def main():
             eval_player_id = 1
 
         try:
-            train_agent = create_agent(train_player_id, FLAGS.train_agent, logger, mcts_impl)
-            eval_agent = create_agent(eval_player_id, FLAGS.eval_agent, logger, None)
+            train_agent = create_agent(train_player_id, config, FLAGS.train_agent, logger, FLAGS.mcts_steps)
+            eval_agent = create_agent(eval_player_id, config, FLAGS.eval_agent, logger, 0)
         except Exception as e:
             logger.critical(f'could not create an agent: {e}')
             raise
