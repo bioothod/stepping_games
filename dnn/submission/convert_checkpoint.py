@@ -8,9 +8,10 @@ FLAGS = parser.parse_args()
 
 def main():
     checkpoint = torch.load(FLAGS.original)
-    actor_checkpoint = checkpoint['actor_state_dict']
+
     torch.save({
-        'actor_state_dict': actor_checkpoint,
+        'actor_state_dict': checkpoint['actor_state_dict'],
+        'critic_state_dict': checkpoint['critic_state_dict'],
     }, FLAGS.output)
 
 if __name__ == '__main__':

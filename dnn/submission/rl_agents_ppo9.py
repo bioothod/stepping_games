@@ -82,12 +82,12 @@ class Actor(nn.Module):
         state_features = self.state_features_model(inputs)
         return state_features
 
-    def create_state(self, player_id, orig_state):
-        state = orig_state
+    def create_state(self, player_id, game_state):
+        state = game_state
         if player_id == 2:
-            state = torch.zeros_like(orig_state)
-            state[orig_state == 2] = 1
-            state[orig_state == 1] = 2
+            state = torch.zeros_like(game_state)
+            state[game_state == 2] = 1
+            state[game_state == 1] = 2
 
         return state
 
@@ -102,14 +102,6 @@ class Actor(nn.Module):
 
         return games
 
-    def create_state_from_observation(self, obs):
-        orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
-
-        state = torch.from_numpy(orig_state)
-        player_id = obs['mark']
-
-        return self.create_state(player_id, state)
-
     def forward_one(self, inputs):
         if self.train_state_features:
             state_features = self.state_features(inputs)
@@ -120,16 +112,18 @@ class Actor(nn.Module):
         outputs = self.features(state_features)
         return outputs
 
-    def forward(self, inputs):
+    def forward(self, player_id, game_states):
+        states = self.create_state(player_id, game_states)
+
         return_logits = []
 
         start_index = 0
-        while start_index < len(inputs):
-            rest = len(inputs) - (start_index + self.batch_size)
+        while start_index < len(states):
+            rest = len(states) - (start_index + self.batch_size)
             if rest < 10:
-                batch = inputs[start_index:, ...]
+                batch = states[start_index:, ...]
             else:
-                batch = inputs[start_index:start_index+self.batch_size, ...]
+                batch = states[start_index:start_index+self.batch_size, ...]
             ret = self.forward_one(batch)
             return_logits.append(ret)
 
@@ -138,8 +132,8 @@ class Actor(nn.Module):
         return_logits = torch.cat(return_logits, 0)
         return return_logits
 
-    def dist_actions(self, inputs):
-        logits = self.forward(inputs)
+    def dist_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         actions = dist.sample()
 
@@ -148,30 +142,20 @@ class Actor(nn.Module):
         is_exploratory = actions != torch.argmax(logits, axis=1)
         return actions, log_prob, is_exploratory
 
-    def select_actions(self, states):
-        logits = self.forward(states)
+    def select_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         actions = dist.sample()
         return actions
 
-    def get_predictions(self, states, actions):
-        logits = self.forward(states)
+    def get_predictions(self, player_id, game_states, actions):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         log_prob = dist.log_prob(actions)
         entropies = dist.entropy()
         return log_prob, entropies
 
-    def greedy_actions(self, states):
-        logits = self.forward(states)
+    def greedy_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         actions = torch.argmax(logits, 1)
         return actions
-
-    def forward_from_observation(self, observation):
-        state = self.create_state_from_observation(observation)
-        state = torch.from_numpy(state)
-
-        states = state.unsqueeze(0)
-        actions = self.greedy_actions(states)
-
-        action = actions.squeeze(0).detach().cpu().numpy()
-        return int(action)
