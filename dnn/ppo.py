@@ -22,8 +22,8 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_ppo_12',
-            'checkpoints_dir': 'checkpoints_ppo_12',
+            'load_checkpoints_dir': 'checkpoints_ppo_13_unique_states',
+            'checkpoints_dir': 'checkpoints_ppo_13_unique_states',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
@@ -259,12 +259,12 @@ class PPO(train_selfplay.BaseTrainer):
         self.set_training_mode(False)
         self.fill_episode_buffer()
 
-        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.train_global_step)
+        game_index, game_states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.train_global_step)
 
         self.logger.debug(f'dump: episode_buffers: '
                          f'completed_games: {len(game_index)}, '
-                         f'experiences: {len(states)}, '
-                         f'states: {states.shape}, '
+                         f'experiences: {len(game_states)}, '
+                         f'game_states: {game_states.shape}, '
                          f'actions: {actions.shape}, '
                          f'log_probs: {log_probs.shape}, '
                          f'values: {values.shape}, '
@@ -273,13 +273,13 @@ class PPO(train_selfplay.BaseTrainer):
 
         gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
 
-        if False:
+        if True:
             unique_state_actions = defaultdict(float)
             dist = []
 
             unique_state_action_index = []
-            for i, (state, action) in enumerate(zip(states, actions)):
-                state_key = tuple(state.cpu().numpy().flatten().tolist())
+            for i, (game_state, action) in enumerate(zip(game_states, actions)):
+                state_key = tuple(game_state.cpu().numpy().flatten().tolist())
                 action_key = tuple(action.cpu().numpy().flatten().tolist())
 
                 state_action_key = state_key + action_key
@@ -293,21 +293,21 @@ class PPO(train_selfplay.BaseTrainer):
             dist = torch.tensor(dist).float()
             self.summary_writer.add_histogram('train/state_action', dist, self.train_global_step, bins=100)
             self.summary_writer.add_scalars('train_iterations/samples', {
-                'samples': len(states),
+                'samples': len(game_states),
                 'unique_state_actions': len(unique_state_actions),
             }, self.train_global_step)
 
             index = torch.tensor(unique_state_action_index).long()
-            states = states[index]
+            game_states = game_states[index]
             actions = actions[index]
             log_probs = log_probs[index]
             gaes = gaes[index]
             values = values[index]
             returns = returns[index]
 
-            state_probs = np.ones(len(states), dtype=np.float32)
-            for i, (state, action) in enumerate(zip(states, actions)):
-                state_key = tuple(state.cpu().numpy().flatten().tolist())
+            state_probs = np.ones(len(game_states), dtype=np.float32)
+            for i, (game_state, action) in enumerate(zip(game_states, actions)):
+                state_key = tuple(game_state.cpu().numpy().flatten().tolist())
                 action_key = tuple(action.cpu().numpy().flatten().tolist())
 
                 state_action_key = state_key + action_key
@@ -319,8 +319,8 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.set_training_mode(True)
 
-        self.optimize_actor(states, actions, log_probs, gaes, state_probs)
-        self.optimize_critic(states, returns, values, state_probs)
+        self.optimize_actor(game_states, actions, log_probs, gaes, state_probs)
+        self.optimize_critic(game_states, returns, values, state_probs)
 
         self.train_global_step += 1
 
