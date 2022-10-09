@@ -19,6 +19,11 @@ config_ppo6.update({
     'num_features': 512,
     'hidden_dims': [128],
 })
+config_ppo7_multichannel = deepcopy(default_config)
+config_ppo7_multichannel.update({
+    'num_features': 512,
+    'hidden_dims': [128],
+})
 config_ppo8 = deepcopy(default_config)
 config_ppo8.update({
     'num_features': 512,
@@ -38,6 +43,8 @@ config_ppo9_multichannel.update({
 def select_config_from_feature_model(feature_model_path):
     if feature_model_path.endswith('ppo6.py'):
         config = config_ppo6
+    elif feature_model_path.endswith('ppo7_multichannel.py'):
+        config = config_ppo7_multichannel
     elif feature_model_path.endswith('ppo8.py'):
         config = config_ppo8
     elif feature_model_path.endswith('ppo9.py'):
@@ -55,7 +62,7 @@ def load_module_from_source(source_path):
     spec.loader.exec_module(module)
     return module
 
-def create_actor(feature_model_path, rl_model_path, config, checkpoint_path):
+def create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic=False):
     feature_module = load_module_from_source(feature_model_path)
 
     def feature_model_creation_func(config):
@@ -68,4 +75,10 @@ def create_actor(feature_model_path, rl_model_path, config, checkpoint_path):
     actor.load_state_dict(checkpoint['actor_state_dict'])
     actor.train(False)
 
-    return actor
+    critic = None
+    if create_critic:
+        critic = actor_module.Critic(config, actor.state_features_model)
+        critic.load_state_dict(checkpoint['critic_state_dict'])
+        critic.train(False)
+
+    return actor, critic

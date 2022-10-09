@@ -22,8 +22,8 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_simple3_ppo_9',
-            'checkpoints_dir': 'checkpoints_simple3_ppo_9',
+            'load_checkpoints_dir': 'checkpoints_ppo_12',
+            'checkpoints_dir': 'checkpoints_ppo_12',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
@@ -38,19 +38,18 @@ class PPO(train_selfplay.BaseTrainer):
             'value_clip_range': float('inf'),
             'value_stopping_mse': 0.85,
 
-            'states_sampling_ratio': 3,
-
             'entropy_loss_weight': 0.1,
 
-            'gamma': 0.99,
+            'gamma': 0.999,
             'tau': 0.97,
+            'default_reward': 0,
 
             'init_lr': 1e-5,
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
-            'num_features': 1024,
-            'hidden_dims': [256],
+            'num_features': 512,
+            'hidden_dims': [128],
 
             'max_gradient_norm': 1.0,
 
@@ -65,18 +64,11 @@ class PPO(train_selfplay.BaseTrainer):
         if os.path.exists(self.config.tensorboard_log_dir) and len(os.listdir(self.config.tensorboard_log_dir)) > 0:
             first_run = False
 
-        #self.config.num_training_games = int(self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio / len(self.config.player_ids))
-        def align(x, alignment):
-            return int((x + alignment - 1) / alignment) * alignment
-
-        #self.config.num_training_games = align(self.config.num_training_games, 512)
-
         super().__init__(self.config)
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple2_model.Model(config)
-            #model = networks.conv_model.Model(config)
+            model = networks.simple3_multichannel_model.Model(config)
             return model
 
 
@@ -94,7 +86,7 @@ class PPO(train_selfplay.BaseTrainer):
 
         model_loaded = self.try_load(self.name, self)
 
-        self.train_env = connectx_impl.ConnectX(self.config, self.critic, self.summary_writer, 'train', self.train_global_step)
+        self.train_env = connectx_impl.ConnectX(self.config)
 
         self.max_eval_metric = 0.0
         if model_loaded:
@@ -148,7 +140,7 @@ class PPO(train_selfplay.BaseTrainer):
             log_probs_batch = log_probs[batch_indexes]
             gaes_batch = gaes[batch_indexes]
 
-            pred_log_probs, pred_entropies = self.actor.get_predictions(states_batch, actions_batch)
+            pred_log_probs, pred_entropies = self.actor.get_predictions_from_states(states_batch, actions_batch)
             ratios = (pred_log_probs - log_probs_batch).exp()
             pi_obj = gaes_batch * ratios
             pi_obj_clipped = gaes_batch * ratios.clamp(1 - self.config.policy_clip_range, 1 + self.config.policy_clip_range)
@@ -166,22 +158,13 @@ class PPO(train_selfplay.BaseTrainer):
             entropy_losses.append(entropy_loss.item())
             total_losses.append(loss.item())
 
-            total_loss = loss.item()
-            if min_total_loss is None or total_loss < min_total_loss:
-                min_total_loss = total_loss
-
-                #if optimization_step < self.config.policy_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
-                #    continue
-
             with torch.no_grad():
-                pred_log_probs_all, _ = self.actor.get_predictions(states, actions)
+                pred_log_probs_all, _ = self.actor.get_predictions_from_states(states, actions)
+
                 kl = (log_probs - pred_log_probs_all).mean()
                 kls.append(kl.item())
                 if kl.item() > self.config.policy_stopping_kl:
                     break
-
-            #if total_sampled >= len(states):
-            #    break
 
         mean_policy_loss = np.mean(policy_losses)
         mean_entropy_loss = np.mean(entropy_losses)
@@ -239,12 +222,6 @@ class PPO(train_selfplay.BaseTrainer):
             value_loss = value_loss.item()
             value_losses.append(value_loss)
 
-            if min_total_loss is None or value_loss < min_total_loss:
-                min_total_loss = value_loss
-
-                #if optimization_step < self.config.value_optimization_steps - 1 and total_sampled < len(states) * self.config.states_sampling_ratio:
-                #    continue
-
             with torch.no_grad():
                 pred_values_all = self.critic(states)
 
@@ -255,11 +232,7 @@ class PPO(train_selfplay.BaseTrainer):
                 mse_returns.append(mse_ret.item())
 
                 if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
-                #if mse_val.item() > self.config.value_stopping_mse:
                     break
-
-            #if total_sampled >= len(states):
-            #    break
 
         mean_value_loss = np.mean(value_losses)
         mean_mse_values = np.mean(mse_values)
@@ -286,7 +259,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.set_training_mode(False)
         self.fill_episode_buffer()
 
-        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump()
+        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.train_global_step)
 
         self.logger.debug(f'dump: episode_buffers: '
                          f'completed_games: {len(game_index)}, '
@@ -356,12 +329,10 @@ class PPO(train_selfplay.BaseTrainer):
     def make_single_step_and_save(self, player_id):
         game_index, game_states = self.train_env.current_states()
         if len(game_index) == 0:
-            #self.logger.info(f'player_id: {player_id}: states: {len(states)}')
             return
 
         with torch.no_grad():
-            states = self.actor.create_state(player_id, game_states).to(self.config.device)
-            actions, log_probs, explorations = self.actor.dist_actions(states)
+            actions, log_probs, explorations = self.actor.dist_actions(player_id, game_states)
 
         new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
 
@@ -369,7 +340,7 @@ class PPO(train_selfplay.BaseTrainer):
         truncated_indexes = torch.logical_and(episode_len + 1 == self.config.max_episode_len, dones != True)
         dones[truncated_indexes] = 1
 
-        next_values = torch.zeros(len(states), dtype=torch.float32)
+        next_values = torch.zeros(len(game_index), dtype=torch.float32)
         if False:
             if truncated_indexes.sum() > 0:
                 with torch.no_grad():
@@ -378,7 +349,7 @@ class PPO(train_selfplay.BaseTrainer):
                     nv = self.critic(next_truncated_states).detach().cpu()
                     next_values[truncated_indexes] = nv
 
-        self.train_env.update_game_rewards(player_id, game_index, states, actions, log_probs, rewards, dones, next_values, explorations)
+        self.train_env.update_game_rewards(player_id, game_index, game_states, actions, log_probs, rewards, dones, next_values, explorations)
 
     def make_step(self):
         for player_id in self.config.player_ids:

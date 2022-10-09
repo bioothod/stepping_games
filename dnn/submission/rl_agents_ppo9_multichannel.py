@@ -83,11 +83,11 @@ class Actor(nn.Module):
         state_features = self.state_features_model(inputs)
         return state_features
 
-    def make_opposite(self, state):
-        state_opposite = torch.zeros_like(state)
-        state_opposite[state == 1] = 2
-        state_opposite[state == 2] = 1
-        return state_opposite
+    def make_opposite(self, game_states):
+        states = torch.zeros_like(game_states)
+        states[game_states == 2] = 1
+        states[game_states == 1] = 2
+        return states
 
     def create_state(self, player_id, game_states):
         if player_id == 2:
@@ -106,30 +106,20 @@ class Actor(nn.Module):
         states = states.transpose(1, 0)
         return states
 
+
     def create_game_from_state(self, player_id, states):
         games = torch.zeros([1, len(states), self.rows, self.columns], dtype=torch.float32)
         game_index = torch.arange(len(states))
 
         for idx, pid in enumerate(self.player_ids):
             ps = states[game_index, idx + 1, :, :] == 1
-
             games[0, ps] = pid
 
         games = games.transpose(0, 1)
         if player_id == 2:
             games = self.make_opposite(games)
+
         return games
-
-    def create_state_from_observation(self, obs):
-        orig_state = np.asarray(obs['board'], dtype=self.observation_dtype).reshape(self.observation_shape)
-
-        state = torch.from_numpy(orig_state)
-        states = state.unsqueeze(0)
-        player_id = obs['mark']
-
-        states = self.create_state(player_id, states)
-        states = states.squeeze(0)
-        return states
 
     def forward_one(self, inputs):
         if self.train_state_features:
@@ -141,16 +131,18 @@ class Actor(nn.Module):
         outputs = self.features(state_features)
         return outputs
 
-    def forward(self, inputs):
+    def forward(self, player_id, game_states):
+        states = self.create_state(player_id, game_states)
+
         return_logits = []
 
         start_index = 0
-        while start_index < len(inputs):
-            rest = len(inputs) - (start_index + self.batch_size)
+        while start_index < len(states):
+            rest = len(states) - (start_index + self.batch_size)
             if rest < 10:
-                batch = inputs[start_index:, ...]
+                batch = states[start_index:, ...]
             else:
-                batch = inputs[start_index:start_index+self.batch_size, ...]
+                batch = states[start_index:start_index+self.batch_size, ...]
             ret = self.forward_one(batch)
             return_logits.append(ret)
 
@@ -159,8 +151,8 @@ class Actor(nn.Module):
         return_logits = torch.cat(return_logits, 0)
         return return_logits
 
-    def dist_actions(self, inputs):
-        logits = self.forward(inputs)
+    def dist_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         actions = dist.sample()
 
@@ -169,30 +161,20 @@ class Actor(nn.Module):
         is_exploratory = actions != torch.argmax(logits, axis=1)
         return actions, log_prob, is_exploratory
 
-    def select_actions(self, states):
-        logits = self.forward(states)
+    def select_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         actions = dist.sample()
         return actions
 
-    def get_predictions(self, states, actions):
-        logits = self.forward(states)
+    def get_predictions(self, player_id, game_states, actions):
+        logits = self.forward(player_id, game_states)
         dist = torch.distributions.Categorical(logits=logits)
         log_prob = dist.log_prob(actions)
         entropies = dist.entropy()
         return log_prob, entropies
 
-    def greedy_actions(self, states):
-        logits = self.forward(states)
+    def greedy_actions(self, player_id, game_states):
+        logits = self.forward(player_id, game_states)
         actions = torch.argmax(logits, 1)
         return actions
-
-    def forward_from_observation(self, observation):
-        state = self.create_state_from_observation(observation)
-        state = torch.from_numpy(state)
-
-        states = state.unsqueeze(0)
-        actions = self.greedy_actions(states)
-
-        action = actions.squeeze(0).detach().cpu().numpy()
-        return int(action)

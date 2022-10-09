@@ -1,3 +1,5 @@
+import math
+
 from collections import defaultdict
 from copy import deepcopy
 
@@ -38,7 +40,11 @@ class MCTSWrapper(nn.Module):
     def dist_actions(self, states):
         actions, log_probs, explorations = self.agent.dist_actions(states)
 
-        used_space = torch.count_nonzero(states, (1, 2, 3))
+        if states.shape[1] == 1:
+            used_space = torch.count_nonzero(states, (1, 2, 3))
+        else:
+            used_space = torch.count_nonzero(states[:, 1:, :, :], (1, 2, 3))
+
         used_index = used_space >= 0
         if used_index.sum() == 0:
             return actions, log_probs, explorations
