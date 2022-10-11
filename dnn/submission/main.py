@@ -82,7 +82,7 @@ mcts_config.update({
     'root_dirichlet_alpha': 0.3,
     'root_exploration_fraction': 0.25,
     'device': 'cpu',
-    'default_reward': 1/42,
+    'default_reward': 0,
 })
 critic = CriticWrapper(actor)
 
@@ -107,7 +107,8 @@ player_id = int(1)
 num_rows = int(mcts_config['rows'])
 num_columns = int(mcts_config['columns'])
 num_inarow = int(mcts_config['inarow'])
-new_game_state, rewards, dones = connectx_impl.step_games(game_state, player_id, actions, num_rows, num_columns, num_inarow)
+default_reward = 0.0
+new_game_state, rewards, dones = connectx_impl.step_games(game_state, player_id, actions, num_rows, num_columns, num_inarow, default_reward)
 
 
 def my_agent(observation, config):
