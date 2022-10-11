@@ -49,8 +49,8 @@ class AgentWrapper(nn.Module):
     def create_state(self, player_id, game_state):
         return self.real_actor.create_state(player_id, game_state)
 
-    def dist_actions(self, inputs):
-        return self.actor.dist_actions(inputs)
+    def dist_actions(self, player_id, game_states):
+        return self.actor.dist_actions(player_id, game_states)
 
 def create_agent(player_id, global_config, name, logger, mcts_steps):
     split = name.split(':')
@@ -107,6 +107,7 @@ def main():
         'logfile': logfile,
         'log_to_stdout': FLAGS.log_to_stdout,
         'num_training_games': FLAGS.num_evaluations,
+        'default_reward': 0,
 
         'gamma': 0.99,
         'tau': 0.97,
