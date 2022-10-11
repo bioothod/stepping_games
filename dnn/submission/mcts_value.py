@@ -262,7 +262,7 @@ class MCTSValue:
         return max_action, max_node.log_prior
 
 class Game:
-    def __init__(self, game_id, config, start_player_id, actor, critic, logger):
+    def __init__(self, game_id, config, actor, critic, logger):
         self.game_id = game_id
         self.logger = logger
 
@@ -272,7 +272,6 @@ class Game:
         self.config = deepcopy(config)
         self.config['num_training_games'] = 1
 
-        self.start_player_id = start_player_id
         self.mcts : MCTSValue = None
 
     def reset(self, player_id, root, game_state):
@@ -291,20 +290,19 @@ class Game:
         return action, log_prob
 
 class Runner(nn.Module):
-    def __init__(self, config, player_id, actor, critic, logger):
+    def __init__(self, config, actor, critic, logger):
         super().__init__()
 
         self.actor = actor
         self.critic = critic
         self.config = config
         self.logger = logger
-        self.player_id = player_id
-        self.games = [Game(game_id, config, player_id, actor, critic, logger) for game_id in range(config['num_training_games'])]
+        self.games = [Game(game_id, config, actor, critic, logger) for game_id in range(config['num_training_games'])]
 
     def step(self, player_id, game_states):
-        if False:
+        if len(game_states) > 1:
             jobs = []
-            for game_id, (game, game_state) in enumerate(zip(self.games, game_states)):
+            for game, game_state in zip(self.games, game_states):
                 game_state = game_state.unsqueeze(0)
                 job = joblib.delayed(game.step)(player_id, game_state, add_exploration_noise=self.config.add_exploration_noise)
                 jobs.append(job)
