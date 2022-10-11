@@ -22,8 +22,8 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_ppo_12',
-            'checkpoints_dir': 'checkpoints_ppo_12',
+            'load_checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
+            'checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
 
             'eval_after_train_steps': 20,
@@ -40,8 +40,8 @@ class PPO(train_selfplay.BaseTrainer):
 
             'entropy_loss_weight': 0.1,
 
-            'gamma': 0.999,
-            'tau': 0.97,
+            'gamma': 1.0,
+            'tau': 0.99,
             'default_reward': 0,
 
             'init_lr': 1e-5,
@@ -53,7 +53,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'max_gradient_norm': 1.0,
 
-            'num_training_games': 1024*2,
+            'num_training_games': 1024*3,
 
             'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
@@ -68,7 +68,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple3_multichannel_model.Model(config)
+            model = networks.simple2_model.Model(config)
             return model
 
 
