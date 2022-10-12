@@ -124,6 +124,9 @@ class EvaluationDataset:
             player_states = self.game_states[player_idx]
 
             player_pred_actions = actor.forward(player_id, player_states)
+            if type(player_pred_actions) == list:
+                player_pred_actions = torch.Tensor(player_pred_actions).long()
+
             pred_actions[player_idx] = player_pred_actions
 
         pred_actions = pred_actions.detach().cpu().numpy()
@@ -135,12 +138,12 @@ class EvaluationDataset:
             if pred_action in good_moves:
                 good_count += 1
 
-        best_score = best_count / len(pred_actions)
-        good_score = good_count / len(pred_actions)
+        best_score = best_count / len(pred_actions) * 100
+        good_score = good_count / len(pred_actions) * 100
 
         if debug:
-            self.logger.info(f'perfect moves: {best_score:.3f}')
-            self.logger.info(f'   good moves: {good_score:.3f}')
+            self.logger.info(f'perfect moves: {best_score:.1f}')
+            self.logger.info(f'   good moves: {good_score:.1f}')
 
         return best_score, good_score
 
@@ -186,17 +189,18 @@ def main():
     })
 
     config.actions = config.columns
+    eval_ds = EvaluationDataset(FLAGS.eval_file, config, logger)
 
+    config.num_training_games = len(eval_ds.game_states)
     try:
         train_agent = create_agent(config, FLAGS.train_agent, logger, FLAGS.mcts_steps)
     except Exception as e:
         logger.critical(f'could not create an agent: {e}')
         raise
 
-    eval_ds = EvaluationDataset(FLAGS.eval_file, config, logger)
 
     best_score, good_score = eval_ds.evaluate(train_agent, debug=False)
-    logger.info(f'{FLAGS.train_agent}: best_score: {best_score:.3f}, good_score: {good_score:.3f}')
+    logger.info(f'{FLAGS.train_agent}: best_score: {best_score:.1f}, good_score: {good_score:.1f}')
 
 if __name__ == '__main__':
     main()

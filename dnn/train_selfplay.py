@@ -84,6 +84,8 @@ class BaseTrainer:
             mean_eval_score = np.mean(eval_rewards)
             std_eval_score = np.std(eval_rewards)
 
+            best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent, debug=False)
+
             self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
                              f'ts: {last_timesteps:2d}, '
@@ -94,7 +96,8 @@ class BaseTrainer:
                              f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
                              f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
-                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
+                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
+                             f'best_score: {best_score:.1f}, good_score: {good_score:.1f}'
                              )
 
             if eval_metric > 0 and eval_metric >= self.max_eval_metric:

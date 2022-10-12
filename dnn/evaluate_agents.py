@@ -108,6 +108,7 @@ def main():
         'log_to_stdout': FLAGS.log_to_stdout,
         'num_training_games': FLAGS.num_evaluations,
         'default_reward': 0,
+        'score_evaluation_dataset': 'refmoves1k_kaggle',
 
         'gamma': 0.99,
         'tau': 0.97,

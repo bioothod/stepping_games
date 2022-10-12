@@ -25,6 +25,7 @@ class PPO(train_selfplay.BaseTrainer):
             'load_checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
             'checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'score_evaluation_dataset': 'refmoves1k_kaggle',
 
             'eval_after_train_steps': 20,
 
