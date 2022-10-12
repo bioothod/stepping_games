@@ -83,6 +83,10 @@ class BaseTrainer:
             std_eval_score = np.std(eval_rewards)
 
             best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent, debug=False)
+            self.summary_writer.add_scalars('eval/score_metric', {
+                'best_score': best_score,
+                'good_score': good_score,
+            })
 
             self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
