@@ -16,7 +16,6 @@ class BaseTrainer:
         config.eval_seed = 555
 
         self.summary_writer = SummaryWriter(log_dir=config.tensorboard_log_dir)
-        self.eval_global_step = torch.zeros(1).long()
 
         torch.manual_seed(config.train_seed)
         np.random.seed(config.train_seed)
@@ -54,10 +53,10 @@ class BaseTrainer:
             self.eval_agent_name = eval_agent_template
 
             eval_agent = evaluate.create_submission_agent(eval_agent_template)
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.eval_global_step)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.global_step)
         else:
             self.eval_agent_name = 'negamax'
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name, self.summary_writer, self.eval_global_step)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name, self.summary_writer, self.global_step)
 
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
@@ -79,7 +78,6 @@ class BaseTrainer:
 
             train_agent.set_training_mode(False)
             eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
-            self.eval_global_step += 1
 
             mean_eval_score = np.mean(eval_rewards)
             std_eval_score = np.std(eval_rewards)

@@ -79,7 +79,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
 
-        self.train_global_step = torch.zeros(1).long()
+        self.global_step = torch.zeros(1).long()
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
@@ -177,9 +177,9 @@ class PPO(train_selfplay.BaseTrainer):
             'entropy': mean_entropy_loss,
             'total': mean_total_loss,
             'kl': mean_kl,
-        }, self.train_global_step)
+        }, self.global_step)
 
-        self.summary_writer.add_scalar('train_iterations/actor', len(total_losses), self.train_global_step)
+        self.summary_writer.add_scalar('train_iterations/actor', len(total_losses), self.global_step)
 
         self.logger.debug(f'optimize_actor : '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
@@ -243,8 +243,8 @@ class PPO(train_selfplay.BaseTrainer):
             'mse_value': mean_mse_values,
             'mse_returns': mean_mse_returns,
             'value': mean_value_loss,
-        }, self.train_global_step)
-        self.summary_writer.add_scalar('train_iterations/critic', len(value_losses), self.train_global_step)
+        }, self.global_step)
+        self.summary_writer.add_scalar('train_iterations/critic', len(value_losses), self.global_step)
 
 
         self.logger.debug(f'optimize_critic: '
@@ -260,7 +260,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.set_training_mode(False)
         self.fill_episode_buffer()
 
-        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.train_global_step)
+        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.global_step)
 
         self.logger.debug(f'dump: episode_buffers: '
                          f'completed_games: {len(game_index)}, '
@@ -292,11 +292,11 @@ class PPO(train_selfplay.BaseTrainer):
                 unique_state_actions[state_action_key] += 1.
 
             dist = torch.tensor(dist).float()
-            self.summary_writer.add_histogram('train/state_action', dist, self.train_global_step, bins=100)
+            self.summary_writer.add_histogram('train/state_action', dist, self.global_step, bins=100)
             self.summary_writer.add_scalars('train_iterations/samples', {
                 'samples': len(states),
                 'unique_state_actions': len(unique_state_actions),
-            }, self.train_global_step)
+            }, self.global_step)
 
             index = torch.tensor(unique_state_action_index).long()
             states = states[index]
@@ -323,7 +323,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.optimize_actor(states, actions, log_probs, gaes, state_probs)
         self.optimize_critic(states, returns, values, state_probs)
 
-        self.train_global_step += 1
+        self.global_step += 1
 
         return True
 
@@ -388,12 +388,12 @@ class PPO(train_selfplay.BaseTrainer):
             if completed_states >= number_of_states_or_requested_states:
                 break
 
-        self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.train_global_step)
+        self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.global_step)
         self.summary_writer.add_scalars('train_iterations/completed_states', {
             'completed_states': completed_states,
             'config_requested_states_size': requested_states_size,
             'winning_rate_number_of_states': number_of_states,
-        }, self.train_global_step)
+        }, self.global_step)
 
 def main():
     ppo = PPO()
