@@ -7,8 +7,8 @@ and against algorithmic agents.
 * GPU connectX implementation
 * DDQN and PPO implementations suitable for the self-play games
 * Current best conv+linear model trained for several days of
-  implemented self-play achieves ~1260 score in
-  https://www.kaggle.com/competitions/connectx (which is shy above
+  implemented self-play achieves ~1270 score in
+  https://www.kaggle.com/competitions/connectx (which is above
   muzero implementation)
 
-![Kaggle submission results (~1260 score, ~10 place)](dnn/kaggle_submission.png)
+![Kaggle submission results (~1270 score, ~10 place)](dnn/kaggle_submission.png)
