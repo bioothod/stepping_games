@@ -6,6 +6,8 @@ from copy import deepcopy
 import numpy as np
 import torch
 
+from evaluate_score import EvaluationDataset
+
 def create_submission_agent(agent_template):
     spl = agent_template.split(':')
     if len(spl) != 3:
@@ -176,6 +178,8 @@ class Evaluate:
         self.logger = logger
         self.config = deepcopy(config)
         self.config['num_training_games'] = num_evaluations
+
+        self.score_eval_ds = EvaluationDataset(config['score_evaluation_dataset'], config, logger)
 
         if isinstance(eval_agent, str):
             self.eval_obj = MultiprocessEval(config, num_evaluations, eval_agent, summary_writer, global_step)

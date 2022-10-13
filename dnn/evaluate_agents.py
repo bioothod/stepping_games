@@ -31,7 +31,7 @@ class EmptySummaryWriter:
         pass
 
 class AgentWrapper(nn.Module):
-    def __init__(self, player_id, config, logger, actor, critic, mcts_steps):
+    def __init__(self, config, logger, actor, critic, mcts_steps):
         super().__init__()
 
         self.logger = logger
@@ -41,7 +41,7 @@ class AgentWrapper(nn.Module):
         self.critic = critic
 
         if mcts_steps > 0:
-            self.actor = Runner(config, player_id, actor, critic, logger)
+            self.actor = Runner(config, actor, critic, logger)
 
     def set_training_mode(self, mode):
         self.real_actor.train(mode)
@@ -49,10 +49,10 @@ class AgentWrapper(nn.Module):
     def create_state(self, player_id, game_state):
         return self.real_actor.create_state(player_id, game_state)
 
-    def dist_actions(self, inputs):
-        return self.actor.dist_actions(inputs)
+    def dist_actions(self, player_id, game_states):
+        return self.actor.dist_actions(player_id, game_states)
 
-def create_agent(player_id, global_config, name, logger, mcts_steps):
+def create_agent(global_config, name, logger, mcts_steps):
     split = name.split(':')
     if len(split) != 4:
         raise ValueError(f'invalid agent name: {name}, format: name:feature_model_path:rl_model_path:checkpoint_path')
@@ -72,7 +72,7 @@ def create_agent(player_id, global_config, name, logger, mcts_steps):
     config.update(local_config)
 
     actor, critic = sub_utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic)
-    agent = AgentWrapper(player_id, config, logger, actor, critic, mcts_steps)
+    agent = AgentWrapper(config, logger, actor, critic, mcts_steps)
     return agent
 
 def main():
@@ -107,6 +107,8 @@ def main():
         'logfile': logfile,
         'log_to_stdout': FLAGS.log_to_stdout,
         'num_training_games': FLAGS.num_evaluations,
+        'default_reward': 0,
+        'score_evaluation_dataset': 'refmoves1k_kaggle',
 
         'gamma': 0.99,
         'tau': 0.97,
@@ -125,20 +127,15 @@ def main():
     config.actions = config.columns
     config.max_episode_len = config.rows * config.columns
 
+    try:
+        train_agent = create_agent(config, FLAGS.train_agent, logger, FLAGS.mcts_steps)
+        eval_agent = create_agent(config, FLAGS.eval_agent, logger, 0)
+    except Exception as e:
+        logger.critical(f'could not create an agent: {e}')
+        raise
+
     for train_player_id in config.player_ids:
         config.train_player_id = train_player_id
-
-        if train_player_id == 1:
-            eval_player_id = 2
-        else:
-            eval_player_id = 1
-
-        try:
-            train_agent = create_agent(train_player_id, config, FLAGS.train_agent, logger, FLAGS.mcts_steps)
-            eval_agent = create_agent(eval_player_id, config, FLAGS.eval_agent, logger, 0)
-        except Exception as e:
-            logger.critical(f'could not create an agent: {e}')
-            raise
 
         evaluation = evaluate.Evaluate(config, logger, FLAGS.num_evaluations, eval_agent, summary_writer, eval_global_step)
         wins, evaluation_rewards = evaluation.evaluate(train_agent)

@@ -17,8 +17,8 @@ class CombinedModel(nn.Module):
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('rl_agents_ppo6.py', 'feature_model_ppo6.py', 'submission_6_ppo100.ckpt', utils.config_ppo6),
             ('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
+            ('rl_agents_ppo12.py', 'feature_model_ppo12.py', 'submission_12_ppo83_critic.ckpt', utils.config_ppo12),
         ]
 
         self.actors = []
@@ -31,7 +31,7 @@ class CombinedModel(nn.Module):
                 checkpoint_path = os.path.join(kaggle_prefix, checkpoint_path)
 
             create_critic = False
-            if rl_model_path.endswith('ppo9_multichannel.py'):
+            if rl_model_path.endswith('ppo12.py'):
                 create_critic = True
 
             actor, critic = utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic)
@@ -82,7 +82,7 @@ mcts_config.update({
     'root_dirichlet_alpha': 0.3,
     'root_exploration_fraction': 0.25,
     'device': 'cpu',
-    'default_reward': 1/42,
+    'default_reward': 0,
 })
 critic = CriticWrapper(actor)
 
@@ -107,12 +107,13 @@ player_id = int(1)
 num_rows = int(mcts_config['rows'])
 num_columns = int(mcts_config['columns'])
 num_inarow = int(mcts_config['inarow'])
-new_game_state, rewards, dones = connectx_impl.step_games(game_state, player_id, actions, num_rows, num_columns, num_inarow)
+default_reward = 0.0
+new_game_state, rewards, dones = connectx_impl.step_games(game_state, player_id, actions, num_rows, num_columns, num_inarow, default_reward)
 
 
 def my_agent(observation, config):
     player_id, game_state = create_game_from_observation(observation, config)
-    actions = mcts_actors[player_id].forward(game_state)
+    actions = mcts_actors[player_id].forward(player_id, game_state)
     return actions[0]
 
 if want_test:

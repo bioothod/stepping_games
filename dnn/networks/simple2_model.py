@@ -38,24 +38,18 @@ class Model(nn.Module):
         columns = config['columns']
         num_features = config['num_features']
 
-        num_output_conv_features = 1024
-        num_input_linear_features = num_output_conv_features * (rows - 3) * columns
+        num_channels = 256
+        num_output_conv_features = num_channels
+        num_input_linear_features = num_output_conv_features * (rows) * columns
 
         self.conv_encoder = nn.Sequential(
-            ConvBlockSingle(1, 3, 1),
-            ConvBlockSingle(3, 64),
+            ConvBlockSingle(3, num_channels),
 
-            ConvBlockSingle(64, 128),
-
-            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
-
-            ConvBlockSingle(128, 256),
-
-            ConvBlockSingle(256, 512),
-
-            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
-
-            ConvBlockSingle(512, 1024),
+            ConvBlockDouble(num_channels),
+            ConvBlockDouble(num_channels),
+            ConvBlockDouble(num_channels),
+            ConvBlockDouble(num_channels),
+            ConvBlockDouble(num_channels),
         )
         
         self.linear_encoder = nn.Sequential(

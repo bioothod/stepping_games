@@ -16,7 +16,6 @@ class BaseTrainer:
         config.eval_seed = 555
 
         self.summary_writer = SummaryWriter(log_dir=config.tensorboard_log_dir)
-        self.eval_global_step = torch.zeros(1).long()
 
         torch.manual_seed(config.train_seed)
         np.random.seed(config.train_seed)
@@ -55,10 +54,10 @@ class BaseTrainer:
             self.eval_agent_name = eval_agent_template
 
             eval_agent = evaluate.create_submission_agent(eval_agent_template)
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.eval_global_step)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, eval_agent, self.summary_writer, self.global_step)
         else:
             self.eval_agent_name = 'negamax'
-            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name, self.summary_writer, self.eval_global_step)
+            self.evaluation = evaluate.Evaluate(config, logger, self.num_evaluations_per_epoch, self.eval_agent_name, self.summary_writer, self.global_step)
 
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
@@ -80,10 +79,15 @@ class BaseTrainer:
 
             train_agent.set_training_mode(False)
             eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
-            self.eval_global_step += 1
 
             mean_eval_score = np.mean(eval_rewards)
             std_eval_score = np.std(eval_rewards)
+
+            best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent, debug=False)
+            self.summary_writer.add_scalars('eval/score_metric', {
+                'best_score': best_score,
+                'good_score': good_score,
+            })
 
             self.logger.info(f'games: {train_env.total_games_completed:6d}: '
                              f'last: '
@@ -95,7 +99,8 @@ class BaseTrainer:
                              f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
                              f'eval: '
                              f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
-                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}'
+                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
+                             f'best_score: {best_score:.1f}, good_score: {good_score:.1f}'
                              )
 
             if eval_metric > 0 and eval_metric >= self.max_eval_metric:

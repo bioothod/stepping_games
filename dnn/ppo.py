@@ -22,9 +22,10 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_ppo_13_unique_states',
-            'checkpoints_dir': 'checkpoints_ppo_13_unique_states',
+            'load_checkpoints_dir': 'checkpoints_ppo_15_entropy_tuning',
+            'checkpoints_dir': 'checkpoints_ppo_15_entropy_tuning',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
+            'score_evaluation_dataset': 'refmoves1k_kaggle',
 
             'eval_after_train_steps': 20,
 
@@ -40,8 +41,8 @@ class PPO(train_selfplay.BaseTrainer):
 
             'entropy_loss_weight': 0.1,
 
-            'gamma': 0.999,
-            'tau': 0.97,
+            'gamma': 1.0,
+            'tau': 0.99,
             'default_reward': 0,
 
             'init_lr': 1e-5,
@@ -53,7 +54,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'max_gradient_norm': 1.0,
 
-            'num_training_games': 1024*2,
+            'num_training_games': 1024*3,
 
             'batch_size': 1024*8,
             'experience_buffer_to_batch_size_ratio': 2,
@@ -68,7 +69,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple3_multichannel_model.Model(config)
+            model = networks.simple2_model.Model(config)
             return model
 
 
@@ -78,7 +79,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
 
-        self.train_global_step = torch.zeros(1).long()
+        self.global_step = torch.zeros(1).long()
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
@@ -176,9 +177,9 @@ class PPO(train_selfplay.BaseTrainer):
             'entropy': mean_entropy_loss,
             'total': mean_total_loss,
             'kl': mean_kl,
-        }, self.train_global_step)
+        }, self.global_step)
 
-        self.summary_writer.add_scalar('train_iterations/actor', len(total_losses), self.train_global_step)
+        self.summary_writer.add_scalar('train_iterations/actor', len(total_losses), self.global_step)
 
         self.logger.debug(f'optimize_actor : '
                          f'iterations: {len(policy_losses)}/{self.config.policy_optimization_steps}, '
@@ -242,8 +243,8 @@ class PPO(train_selfplay.BaseTrainer):
             'mse_value': mean_mse_values,
             'mse_returns': mean_mse_returns,
             'value': mean_value_loss,
-        }, self.train_global_step)
-        self.summary_writer.add_scalar('train_iterations/critic', len(value_losses), self.train_global_step)
+        }, self.global_step)
+        self.summary_writer.add_scalar('train_iterations/critic', len(value_losses), self.global_step)
 
 
         self.logger.debug(f'optimize_critic: '
@@ -259,7 +260,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.set_training_mode(False)
         self.fill_episode_buffer()
 
-        game_index, game_states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.train_global_step)
+        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.global_step)
 
         self.logger.debug(f'dump: episode_buffers: '
                          f'completed_games: {len(game_index)}, '
@@ -291,11 +292,11 @@ class PPO(train_selfplay.BaseTrainer):
                 unique_state_actions[state_action_key] += 1.
 
             dist = torch.tensor(dist).float()
-            self.summary_writer.add_histogram('train/state_action', dist, self.train_global_step, bins=100)
+            self.summary_writer.add_histogram('train/state_action', dist, self.global_step, bins=100)
             self.summary_writer.add_scalars('train_iterations/samples', {
                 'samples': len(game_states),
                 'unique_state_actions': len(unique_state_actions),
-            }, self.train_global_step)
+            }, self.global_step)
 
             index = torch.tensor(unique_state_action_index).long()
             game_states = game_states[index]
@@ -322,7 +323,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.optimize_actor(game_states, actions, log_probs, gaes, state_probs)
         self.optimize_critic(game_states, returns, values, state_probs)
 
-        self.train_global_step += 1
+        self.global_step += 1
 
         return True
 
@@ -387,12 +388,12 @@ class PPO(train_selfplay.BaseTrainer):
             if completed_states >= number_of_states_or_requested_states:
                 break
 
-        self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.train_global_step)
+        self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.global_step)
         self.summary_writer.add_scalars('train_iterations/completed_states', {
             'completed_states': completed_states,
             'config_requested_states_size': requested_states_size,
             'winning_rate_number_of_states': number_of_states,
-        }, self.train_global_step)
+        }, self.global_step)
 
 def main():
     ppo = PPO()

@@ -6,10 +6,9 @@ and against algorithmic agents.
   implemented in the tree)
 * GPU connectX implementation
 * DDQN and PPO implementations suitable for the self-play games
-* PPO with simple3 (conv+linear) model trained for several days of
-  self-play beats negamax in 90-100% of the cases (depending on the seed)
-<<<<<<< HEAD
-=======
+* Current best conv+linear model trained for several days of
+  implemented self-play achieves ~1270 score in
+  https://www.kaggle.com/competitions/connectx (which is above
+  muzero implementation)
 
-![Kaggle submission results (~1150 score, ~10 place)](dnn/kaggle_submission.jpg)
->>>>>>> master
+![Kaggle submission results (~1270 score, ~10 place)](dnn/kaggle_submission.png)

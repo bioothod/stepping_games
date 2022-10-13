@@ -1,6 +1,6 @@
 from typing import *
 
-#import joblib
+import joblib
 import math
 
 from copy import deepcopy
@@ -103,6 +103,8 @@ class MCTSValue:
         self.columns = config['columns']
         self.inarow = config['inarow']
         self.device = config['device']
+        self.default_reward = config['default_reward']
+        self.player_ids = config['player_ids']
 
         self.logger = logger
 
@@ -180,7 +182,8 @@ class MCTSValue:
             game_state = game_state.to(self.device)
             actions = torch.Tensor([action]).long()
 
-            new_game_state, rewards, dones = connectx_impl.step_games(game_state, node.player_id, actions, self.rows, self.columns, self.inarow)
+            #self.logger.info(f'node_expand: parent: {parent.player_id}, node: {node.player_id}, actions: {actions}, game_state: {game_state.shape}')
+            new_game_state, rewards, dones = connectx_impl.step_games(game_state, node.player_id, actions, self.rows, self.columns, self.inarow, self.default_reward)
 
             new_state = self.actor.create_state(node.player_id, new_game_state)
             new_state = new_state.to(self.device)
@@ -189,7 +192,11 @@ class MCTSValue:
 
             logits = self.actor.forward(node.player_id, new_game_state)
 
-            other_player_id = 2 if parent.player_id == 1 else 1
+            node_player_index = self.player_ids.index(node.player_id)
+            node_player_index += 1
+            node_player_index %= len(self.player_ids)
+
+            other_player_id = self.player_ids[node_player_index]
             node.expand(other_player_id, logits[0], rewards[0])
 
             if dones[0]:
@@ -255,7 +262,7 @@ class MCTSValue:
         return max_action, max_node.log_prior
 
 class Game:
-    def __init__(self, game_id, config, start_player_id, actor, critic, logger):
+    def __init__(self, game_id, config, actor, critic, logger):
         self.game_id = game_id
         self.logger = logger
 
@@ -265,16 +272,15 @@ class Game:
         self.config = deepcopy(config)
         self.config['num_training_games'] = 1
 
-        self.start_player_id = start_player_id
         self.mcts : MCTSValue = None
 
     def reset(self, player_id, root, game_state):
         self.mcts = MCTSValue(player_id, self.config, root, game_state, self.actor, self.critic, self.logger)
 
-    def step(self, game_state, add_exploration_noise):
+    def step(self, player_id, game_state, add_exploration_noise):
         #self.logger.info(f'mcts::game::step: game_id: {self.game_id}, start_player_id: {self.start_player_id}, game_state: {game_state.shape}')
 
-        self.reset(self.start_player_id, None, game_state)
+        self.reset(player_id, None, game_state)
 
         #self.logger.info(f'game_id: {self.game_id}, start_player_id: {self.start_player_id}, game_state:\n{game_state}')
         action, log_prob = self.mcts.run(add_exploration_noise=add_exploration_noise)
@@ -284,28 +290,31 @@ class Game:
         return action, log_prob
 
 class Runner(nn.Module):
-    def __init__(self, config, player_id, actor, critic, logger):
+    def __init__(self, config, actor, critic, logger):
         super().__init__()
 
         self.actor = actor
         self.critic = critic
         self.config = config
         self.logger = logger
-        self.player_id = player_id
-        self.games = [Game(game_id, config, player_id, actor, critic, logger) for game_id in range(config['num_training_games'])]
+        self.games = [Game(game_id, config, actor, critic, logger) for game_id in range(config['num_training_games'])]
 
-    def step(self, game_states):
-        if False:
+    def step(self, player_id, game_states):
+        if len(game_states) > 1:
             jobs = []
-            for game_id, (game, game_state) in enumerate(zip(self.games, game_states)):
-                state = state.unsqueeze(0)
-                job = joblib.delayed(game.step)(game_state, add_exploration_noise=self.config.add_exploration_noise)
+            for game, game_state in zip(self.games, game_states):
+                game_state = game_state.unsqueeze(0)
+                job = joblib.delayed(game.step)(player_id, game_state, add_exploration_noise=self.config.add_exploration_noise)
                 jobs.append(job)
 
             with joblib.parallel_backend('threading', n_jobs=16):
                 results = joblib.Parallel(require='sharedmem')(jobs)
         else:
-            results = self.games[0].step(game_states, add_exploration_noise=False)
+            #self.logger.info(f'runner::step: player_id: {player_id}, game_states: {game_states.shape}, games: {len(self.games)}')
+            results = self.games[0].step(player_id, game_states, add_exploration_noise=False)
+            action, log_prob = results
+            self.logger.info(f'results: {results}')
+            return [action], [log_prob]
 
         all_actions = []
         all_probs = []
@@ -318,24 +327,23 @@ class Runner(nn.Module):
     def create_state(self, player_id, game_states):
         return self.actor.create_state(player_id, game_states)
 
-    def greedy_actions(self, states):
-        mcts_actions, mcts_log_probs = self.step(states)
+    def greedy_actions(self, player_id, game_states):
+        mcts_actions, mcts_log_probs = self.step(player_id, game_states)
         return mcts_actions
 
-    def forward(self, game_state):
+    def forward(self, player_id, game_state):
         game_state = game_state.unsqueeze(0)
-        return self.games[0].step(game_state, add_exploration_noise=False)
+        return self.games[0].step(player_id, game_state, add_exploration_noise=False)
 
-    def dist_actions(self, game_states):
-        states = self.actor.create_state(game_states)
-        actions, log_probs, explorations = self.actor.dist_actions(states)
+    def dist_actions(self, player_id, game_states):
+        actions, log_probs, explorations = self.actor.dist_actions(player_id, game_states)
 
-        mcts_actions, mcts_log_probs = self.step(game_states)
+        mcts_actions, mcts_log_probs = self.step(player_id, game_states)
         mcts_actions = torch.tensor(mcts_actions).long().to(actions.device)
         mcts_log_probs = torch.tensor(mcts_log_probs).float().to(log_probs.device)
 
         changed_mcts = torch.count_nonzero(actions != mcts_actions) / len(mcts_actions) * 100
 
-        #self.logger.info(f'mcts: changed_mcts: {changed_mcts:.1f}%')
+        self.logger.info(f'mcts: player_id: {player_id}, game_states: {game_states.shape}, changed_mcts: {changed_mcts:.1f}%')
 
         return mcts_actions, mcts_log_probs, explorations
