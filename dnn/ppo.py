@@ -261,7 +261,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.set_training_mode(False)
         self.fill_episode_buffer()
 
-        game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.global_step)
+        game_index, game_states, actions, log_probs, gaes, values, returns = self.train_env.dump(self.actor, self.critic, self.summary_writer, 'train', self.global_step)
 
         self.logger.debug(f'dump: episode_buffers: '
                          f'completed_games: {len(game_index)}, '
@@ -274,6 +274,8 @@ class PPO(train_selfplay.BaseTrainer):
                          f'gaes: {gaes.shape}')
 
         gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
+        
+        state_probs = np.ones(len(game_states), dtype=np.float32)
 
         if True:
             unique_state_actions = defaultdict(float)
@@ -292,8 +294,6 @@ class PPO(train_selfplay.BaseTrainer):
 
                 unique_state_actions[state_action_key] += 1.
 
-            dist = torch.tensor(dist).float()
-            self.summary_writer.add_histogram('train/state_action', dist, self.global_step, bins=100)
             self.summary_writer.add_scalars('train_iterations/samples', {
                 'samples': len(game_states),
                 'unique_state_actions': len(unique_state_actions),
@@ -316,8 +316,6 @@ class PPO(train_selfplay.BaseTrainer):
                 state_probs[i] = unique_state_actions[state_action_key]
 
             state_probs /= state_probs.sum()
-        else:
-            state_probs = np.ones(len(states), dtype=np.float32)
 
         self.set_training_mode(True)
 

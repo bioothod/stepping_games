@@ -123,7 +123,7 @@ class EvaluationDataset:
             player_idx = torch.arange(len(self.game_states))[self.game_player_ids == player_id]
             player_states = self.game_states[player_idx]
 
-            player_pred_actions = actor.forward(player_id, player_states)
+            player_pred_actions = actor.actor.greedy_actions(player_id, player_states)
             if type(player_pred_actions) == list:
                 player_pred_actions = torch.Tensor(player_pred_actions).long()
 
