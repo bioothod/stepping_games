@@ -27,22 +27,22 @@ class PPO(train_selfplay.BaseTrainer):
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
-            'eval_after_train_steps': 20,
+            'eval_after_train_steps': 1,
 
             'max_episode_len': 42,
 
             'policy_optimization_steps': 10,
             'policy_clip_range': 0.1,
-            'policy_stopping_kl': 0.02,
+            'policy_stopping_kl': 0.1,
 
             'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
-            'value_stopping_mse': 0.85,
+            'value_stopping_mse': 0.9,
 
-            'entropy_loss_weight': 0.1,
+            'entropy_loss_weight': 0.2,
 
-            'gamma': 1.0,
-            'tau': 0.99,
+            'gamma': 0.99,
+            'tau': 0.95,
             'default_reward': 0,
 
             'init_lr': 1e-5,
@@ -64,12 +64,15 @@ class PPO(train_selfplay.BaseTrainer):
         first_run = True
         if os.path.exists(self.config.tensorboard_log_dir) and len(os.listdir(self.config.tensorboard_log_dir)) > 0:
             first_run = False
+            
+        self.global_step = torch.zeros(1).long()
+
 
         super().__init__(self.config)
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple2_model.Model(config)
+            model = networks.simple3_model.Model(config)
             return model
 
 
@@ -78,8 +81,6 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
-
-        self.global_step = torch.zeros(1).long()
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')

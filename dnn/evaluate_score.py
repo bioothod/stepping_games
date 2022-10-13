@@ -110,7 +110,7 @@ class EvaluationDataset:
 
         player_state_rates = []
         for player_id in self.player_ids:
-            rate = float(torch.count_nonzero(self.game_player_ids == player_id).numpy()) / len(self.game_player_ids)
+            rate = float(torch.count_nonzero(self.game_player_ids == player_id).cpu().numpy()) / len(self.game_player_ids)
             rate = rate * 100
             player_state_rates.append(f'{player_id}:{rate:.1f}%')
 
