@@ -95,7 +95,6 @@ class PPO(train_selfplay.BaseTrainer):
             eval_time_start = perf_counter()
             self.max_eval_metric, eval_rewards = self.evaluation.evaluate(self)
             self.max_mean_eval_metric = np.mean(eval_rewards)
-            self.eval_global_step += 1
             eval_time = perf_counter() - eval_time_start
 
             self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, mean: {self.max_mean_eval_metric:.4f} evaluation time: {eval_time:.1f} sec')

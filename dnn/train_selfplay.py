@@ -46,6 +46,7 @@ class BaseTrainer:
         self.logger.info(f'config:\n{config_message}')
 
         self.num_evaluations_per_epoch = 100
+        self.max_score_metric = 0.0
         self.max_eval_metric = 0.0
         self.max_mean_eval_metric = -float('inf')
 
@@ -61,6 +62,9 @@ class BaseTrainer:
 
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
+
+    def copy_weights(self):
+        return
 
     def run_epoch(self, train_env, train_agent):
         training_started = False
@@ -83,25 +87,26 @@ class BaseTrainer:
             mean_eval_score = np.mean(eval_rewards)
             std_eval_score = np.std(eval_rewards)
 
-            best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent, debug=False)
+            best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent.actor, debug=False)
             self.summary_writer.add_scalars('eval/score_metric', {
                 'best_score': best_score,
                 'good_score': good_score,
-            })
+            }, self.global_step)
 
-            self.logger.info(f'games: {train_env.total_games_completed:6d}: '
-                             f'last: '
-                             f'ts: {last_timesteps:2d}, '
-                             f'r: {last_rewards[0]:5.2f} / {last_rewards[1]:5.2f}, '
-                             f'last: '
-                             f'ts: {mean_timesteps:4.1f}\u00B1{std_timesteps:3.1f}, '
-                             f'r: {mean_rewards[0]:5.2f}\u00B1{std_rewards[0]:4.2f} / {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f}, '
-                             f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
-                             f'eval: '
-                             f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
-                             f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
-                             f'best_score: {best_score:.1f}, good_score: {good_score:.1f}'
-                             )
+            if eval_metric >= self.max_eval_metric or best_score >= self.max_score_metric or mean_eval_score > self.max_mean_eval_metric:
+                self.logger.info(f'games: {train_env.total_games_completed:6d}: '
+                                 f'last: '
+                                 f'ts: {last_timesteps:2d}, '
+                                 f'r: {last_rewards[0]:5.2f} / {last_rewards[1]:5.2f}, '
+                                 f'last: '
+                                 f'ts: {mean_timesteps:4.1f}\u00B1{std_timesteps:3.1f}, '
+                                 f'r: {mean_rewards[0]:5.2f}\u00B1{std_rewards[0]:4.2f} / {mean_rewards[1]:5.2f}\u00B1{std_rewards[1]:4.2f}, '
+                                 f'expl: {mean_explorations[0]:.2f}\u00B1{std_explorations[0]:.1f} / {mean_explorations[1]:.2f}\u00B1{std_explorations[1]:.1f}, '
+                                 f'eval: '
+                                 f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
+                                 f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
+                                 f'best_score: {best_score:.2f} / {self.max_score_metric:.2f}, good_score: {good_score:.2f}'
+                                 )
 
             if eval_metric > 0 and eval_metric >= self.max_eval_metric:
                 if eval_metric < 100:
@@ -109,7 +114,17 @@ class BaseTrainer:
 
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
                 train_agent.save(checkpoint_path)
+                self.copy_weights()
+
                 self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {train_agent.name} -> {checkpoint_path}')
+
+            if best_score >= self.max_score_metric:
+                self.max_score_metric = best_score
+                checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_best_score.ckpt')
+                train_agent.save(checkpoint_path)
+                self.copy_weights()
+
+                self.logger.info(f'max_score_metric: {best_score:.2f}, saved {train_agent.name} -> {checkpoint_path}')
 
             if mean_eval_score > self.max_mean_eval_metric:
                 self.max_mean_eval_metric = mean_eval_score
