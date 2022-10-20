@@ -21,7 +21,8 @@ class Critic(nn.Module):
 
             l = nn.Linear(input_dim, output_dim)
             modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
+            modules.append(nn.GELU())
+            #modules.append(nn.ReLU(inplace=True))
 
         self.values = nn.Sequential(*modules)
 
@@ -76,7 +77,8 @@ class Actor(nn.Module):
 
             l = nn.Linear(input_dim, output_dim)
             modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
+            #modules.append(nn.ReLU(inplace=True))
+            modules.append(nn.GELU())
 
         self.features = nn.Sequential(*modules)
 

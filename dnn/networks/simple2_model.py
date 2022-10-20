@@ -43,8 +43,13 @@ class Model(nn.Module):
         num_input_linear_features = num_output_conv_features * (rows) * columns
 
         self.conv_encoder = nn.Sequential(
-            ConvBlockSingle(3, num_channels),
+            ConvBlockSingle(3, 16),
+            ConvBlockSingle(16, 32),
+            ConvBlockSingle(32, 64),
+            ConvBlockSingle(64, 128),
+            ConvBlockSingle(128, 256),
 
+            ConvBlockDouble(num_channels),
             ConvBlockDouble(num_channels),
             ConvBlockDouble(num_channels),
             ConvBlockDouble(num_channels),
