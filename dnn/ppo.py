@@ -22,12 +22,11 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'load_checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
-            'checkpoints_dir': 'checkpoints_ppo_13_large_simple2_model',
+            'checkpoints_dir': 'checkpoints_ppo_21',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
-            'eval_after_train_steps': 20,
+            'eval_after_train_steps': 5,
 
             'max_episode_len': 42,
 
@@ -39,22 +38,34 @@ class PPO(train_selfplay.BaseTrainer):
             'value_clip_range': float('inf'),
             'value_stopping_mse': 0.85,
 
-            'entropy_loss_weight': 0.1,
+            'entropy_loss_weight': 0.15,
 
-            'gamma': 1.0,
-            'tau': 0.99,
+            'gamma': 0.999,
+            'tau': 0.97,
             'default_reward': 0,
 
             'init_lr': 1e-5,
 
             'num_games_to_stop_training_state_model': 100_000_000,
 
+            'channels': 3,
+            'num_layers': 4,
+            'hidden_size': 512,
+            'filter_size': 1024,
+            'decoder_dropout': 0.,
+            'total_key_depth': 64,
+            'total_value_depth': 64,
+            'attn_num_heads': 2,
+            'attn_type': 'global',
+            'distr': 'cat',
+
+
             'num_features': 512,
             'hidden_dims': [128],
 
             'max_gradient_norm': 1.0,
 
-            'num_training_games': 1024*3,
+            'num_training_games': 1024*2,
 
             'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
@@ -65,43 +76,57 @@ class PPO(train_selfplay.BaseTrainer):
         if os.path.exists(self.config.tensorboard_log_dir) and len(os.listdir(self.config.tensorboard_log_dir)) > 0:
             first_run = False
 
+        self.global_step = torch.zeros(1).long()
+
         super().__init__(self.config)
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple2_model.Model(config)
+            #model = networks.simple3_model.Model(config)
+            model = networks.transformer_1d_model.Model(config)
             return model
 
 
         self.actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
+        self.best_actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
         self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.config.init_lr)
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
+        self.best_critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
-
-        self.global_step = torch.zeros(1).long()
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
             self.logger.info(f'critic:\n{print_networks("critic", self.critic, verbose=True)}')
 
-        model_loaded = self.try_load(self.name, self)
-
         self.train_env = connectx_impl.ConnectX(self.config)
 
-        self.max_eval_metric = 0.0
+        model_loaded = self.try_load(self.name, self)
+
         if model_loaded:
             eval_time_start = perf_counter()
             self.max_eval_metric, eval_rewards = self.evaluation.evaluate(self)
-            self.max_mean_eval_metric = np.mean(eval_rewards)
-            self.eval_global_step += 1
             eval_time = perf_counter() - eval_time_start
 
-            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: {self.max_eval_metric:.2f}, mean: {self.max_mean_eval_metric:.4f} evaluation time: {eval_time:.1f} sec')
+            self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: '
+                             f'max_eval_metric: {self.max_eval_metric:.2f}, '
+                             f'mean: {self.max_mean_eval_metric:.4f}, '
+                             f'max_score_metric: {self.max_score_metric}, '
+                             f'evaluation time: {eval_time:.1f} sec')
+
+        self.copy_weights()
 
     def set_training_mode(self, training):
         self.actor.train(training)
         self.critic.train(training)
+
+    def copy_weights_one(self, dst_model, src_model):
+        for dst, src in zip(dst_model.parameters(), src_model.parameters()):
+            dst.data = src.data.detach().clone()
+
+    def copy_weights(self):
+        self.copy_weights_one(self.best_actor, self.actor)
+        self.copy_weights_one(self.best_critic, self.critic)
 
     def save(self, checkpoint_path):
         torch.save({
@@ -109,6 +134,11 @@ class PPO(train_selfplay.BaseTrainer):
             'actor_optimizer_state_dict': self.actor_opt.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'critic_optimizer_state_dict': self.critic_opt.state_dict(),
+            'global_step': self.global_step,
+            'total_games_completed': self.train_env.total_games_completed,
+            'max_eval_metric': self.max_eval_metric,
+            'max_mean_eval_metric': self.max_mean_eval_metric,
+            'max_score_metric': self.max_score_metric,
             }, checkpoint_path)
 
         return checkpoint_path
@@ -119,6 +149,13 @@ class PPO(train_selfplay.BaseTrainer):
         self.actor_opt.load_state_dict(checkpoint['actor_optimizer_state_dict'])
         self.critic.load_state_dict(checkpoint['critic_state_dict'])
         self.critic_opt.load_state_dict(checkpoint['critic_optimizer_state_dict'])
+
+        if 'global_step' in checkpoint:
+            self.global_step = checkpoint['global_step']
+            self.train_env.total_games_completed = checkpoint['total_games_completed']
+            self.max_eval_metric = checkpoint['max_eval_metric']
+            self.max_mean_eval_metric = checkpoint['max_mean_eval_metric']
+            self.max_score_metric = checkpoint['max_score_metric']
 
         self.logger.info(f'{self.name}: loaded checkpoint {checkpoint_path}')
 
@@ -274,7 +311,9 @@ class PPO(train_selfplay.BaseTrainer):
 
         gaes = (gaes - gaes.mean()) / (gaes.std() + 1e-8)
 
-        if False:
+        state_probs = np.ones(len(states), dtype=np.float32)
+
+        if self.global_step % 10 == 0:
             unique_state_actions = defaultdict(float)
             dist = []
 
@@ -291,32 +330,25 @@ class PPO(train_selfplay.BaseTrainer):
 
                 unique_state_actions[state_action_key] += 1.
 
-            dist = torch.tensor(dist).float()
-            self.summary_writer.add_histogram('train/state_action', dist, self.global_step, bins=100)
             self.summary_writer.add_scalars('train_iterations/samples', {
                 'samples': len(states),
                 'unique_state_actions': len(unique_state_actions),
             }, self.global_step)
 
-            index = torch.tensor(unique_state_action_index).long()
-            states = states[index]
-            actions = actions[index]
-            log_probs = log_probs[index]
-            gaes = gaes[index]
-            values = values[index]
-            returns = returns[index]
+            if False:
+                index = torch.tensor(unique_state_action_index).long()
+                states = states[index]
+                actions = actions[index]
+                log_probs = log_probs[index]
+                gaes = gaes[index]
+                values = values[index]
+                returns = returns[index]
 
-            state_probs = np.ones(len(states), dtype=np.float32)
-            for i, (state, action) in enumerate(zip(states, actions)):
-                state_key = tuple(state.cpu().numpy().flatten().tolist())
-                action_key = tuple(action.cpu().numpy().flatten().tolist())
+                state_probs = np.ones(len(states), dtype=np.float32)
+                for i, state_action_key in enumerate(dist):
+                    state_probs[i] = unique_state_actions[state_action_key]
 
-                state_action_key = state_key + action_key
-                state_probs[i] = unique_state_actions[state_action_key]
-
-            state_probs /= state_probs.sum()
-        else:
-            state_probs = np.ones(len(states), dtype=np.float32)
+                state_probs /= state_probs.sum()
 
         self.set_training_mode(True)
 
@@ -327,12 +359,71 @@ class PPO(train_selfplay.BaseTrainer):
 
         return True
 
+    def make_indexes(self, game_states, agents):
+        index_all = torch.arange(len(game_states))
+        middle_point = len(game_states) // 2
+        index0 = index_all[:middle_point]
+        index1 = index_all[middle_point:]
+
+        ret_indexes = [index0, index1]
+        ret_agents = [(agents[0], agents[1]), (agents[1], agents[0])]
+
+        return ret_indexes, ret_agents
+
+    def make_values(self, player_id, game_states):
+        indexes, agents = self.make_indexes(game_states, [self.critic, self.best_critic])
+
+        all_values = []
+
+        player_index = self.config.player_ids.index(player_id)
+
+        for index, agents in zip(indexes, agents):
+            play_agent = agents[player_index]
+
+            play_states = game_states[index]
+            with torch.no_grad():
+                values = play_agent(play_states)
+
+            all_values.append(values)
+
+        all_values = torch.cat(all_values, 0)
+
+        return all_values
+
+    def make_actions(self, player_id, game_states):
+        indexes, agents = self.make_indexes(game_states, [self.actor, self.best_actor])
+
+        all_actions = []
+        all_log_probs = []
+        all_explorations = []
+
+        player_index = self.config.player_ids.index(player_id)
+
+        for index, agents in zip(indexes, agents):
+            play_agent = agents[player_index]
+
+            play_states = game_states[index]
+            with torch.no_grad():
+                actions, log_probs, explorations = play_agent.dist_actions(player_id, play_states)
+
+            all_actions.append(actions)
+            all_log_probs.append(log_probs)
+            all_explorations.append(explorations)
+
+        all_actions = torch.cat(all_actions, 0)
+        all_log_probs = torch.cat(all_log_probs, 0)
+        all_explorations = torch.cat(all_explorations, 0)
+
+        return all_actions, all_log_probs, all_explorations
+
+
     def make_single_step_and_save(self, player_id):
         game_index, game_states = self.train_env.current_states()
         if len(game_index) == 0:
             return
 
         with torch.no_grad():
+            #actions, log_probs, explorations = self.make_actions(player_id, game_states)
             actions, log_probs, explorations = self.actor.dist_actions(player_id, game_states)
 
         new_states, rewards, dones = self.train_env.step(player_id, game_index, actions)
