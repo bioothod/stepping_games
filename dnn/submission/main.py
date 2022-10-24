@@ -17,7 +17,8 @@ class CombinedModel(nn.Module):
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
+            #('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
+            ('rl_agents_ppo18.py', 'feature_model_ppo18.py', 'checkpoint_ppo_18_best_score_77.7.ckpt', utils.config_ppo18),
             ('rl_agents_ppo12.py', 'feature_model_ppo12.py', 'submission_12_ppo83_critic.ckpt', utils.config_ppo12),
         ]
 
@@ -98,7 +99,7 @@ def create_game_from_observation(obs, config):
 from logger import setup_logger
 logger = setup_logger('test', None, True)
 
-mcts_actors = {player_id:Runner(mcts_config, player_id, actor, critic, logger=logger) for player_id in [1, 2]}
+mcts_actors = {player_id:Runner(mcts_config, actor, critic, logger=logger) for player_id in [1, 2]}
 
 import connectx_impl
 game_state = torch.zeros((1, 1, mcts_config['rows'], mcts_config['columns'])).float()
