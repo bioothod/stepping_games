@@ -22,7 +22,7 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'checkpoints_dir': 'checkpoints_ppo_21',
+            'checkpoints_dir': 'checkpoints_ppo_22',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
@@ -38,7 +38,9 @@ class PPO(train_selfplay.BaseTrainer):
             'value_clip_range': float('inf'),
             'value_stopping_mse': 0.85,
 
-            'entropy_loss_weight': 0.15,
+            'entropy_loss_weight': 0.1,
+
+            'weight_decay': 1e-3,
 
             'gamma': 0.999,
             'tau': 0.97,
@@ -82,18 +84,18 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            #model = networks.simple3_model.Model(config)
-            model = networks.transformer_1d_model.Model(config)
+            model = networks.simple3_model.Model(config)
+            #model = networks.transformer_1d_model.Model(config)
             return model
 
 
         self.actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
         self.best_actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
-        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.config.init_lr)
+        self.actor_opt = torch.optim.AdamW(self.actor.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.best_critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
+        self.critic_opt = torch.optim.AdamW(self.critic.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
@@ -166,11 +168,10 @@ class PPO(train_selfplay.BaseTrainer):
         entropy_losses = []
         total_losses = []
         kls = []
-        min_total_loss = None
         total_sampled = 0
         for optimization_step in range(self.config.policy_optimization_steps):
-            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
-            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
+            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_batch = states[batch_indexes]
@@ -233,12 +234,11 @@ class PPO(train_selfplay.BaseTrainer):
         value_losses = []
         mse_values = []
         mse_returns = []
-        min_total_loss = None
         total_sampled = 0
 
         for optimization_step in range(self.config.value_optimization_steps):
-            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
-            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
+            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_sampled = states[batch_indexes]
@@ -314,21 +314,15 @@ class PPO(train_selfplay.BaseTrainer):
         state_probs = np.ones(len(states), dtype=np.float32)
 
         if self.global_step % 10 == 0:
-            unique_state_actions = defaultdict(float)
-            dist = []
+            unique_state_actions = defaultdict(list)
 
-            unique_state_action_index = []
             for i, (state, action) in enumerate(zip(states, actions)):
                 state_key = tuple(state.cpu().numpy().flatten().tolist())
                 action_key = tuple(action.cpu().numpy().flatten().tolist())
 
                 state_action_key = state_key + action_key
-                dist.append(state_action_key)
 
-                if state_action_key not in unique_state_actions:
-                    unique_state_action_index.append(i)
-
-                unique_state_actions[state_action_key] += 1.
+                unique_state_actions[state_action_key].append(i)
 
             self.summary_writer.add_scalars('train_iterations/samples', {
                 'samples': len(states),
@@ -336,20 +330,32 @@ class PPO(train_selfplay.BaseTrainer):
             }, self.global_step)
 
             if False:
-                index = torch.tensor(unique_state_action_index).long()
-                states = states[index]
-                actions = actions[index]
-                log_probs = log_probs[index]
-                gaes = gaes[index]
-                values = values[index]
-                returns = returns[index]
+                new_states = []
+                new_actions = []
+                new_log_probs = []
+                new_gaes = []
+                new_values = []
+                new_returns = []
 
-                state_probs = np.ones(len(states), dtype=np.float32)
-                for i, state_action_key in enumerate(dist):
-                    state_probs[i] = unique_state_actions[state_action_key]
+                state_probs = np.ones(len(unique_state_actions), dtype=np.float32)
+                for i, index in enumerate(unique_state_actions.values()):
+                    state_probs[i] = len(index)
+                    new_states.append(states[index[0]])
+                    new_actions.append(actions[index[0]])
 
-                state_probs /= state_probs.sum()
+                    new_log_probs.append(log_probs[index].mean(0))
+                    new_gaes.append(gaes[index].mean(0))
+                    new_values.append(values[index].mean(0))
+                    new_returns.append(returns[index].mean(0))
 
+                states = torch.stack(new_states, 0).to(states.device)
+                actions = torch.Tensor(new_actions).to(states.device)
+                log_probs = torch.Tensor(new_log_probs).to(states.device)
+                gaes = torch.Tensor(new_gaes).to(states.device)
+                values = torch.Tensor(new_values).to(states.device)
+                returns = torch.Tensor(new_returns).to(states.device)
+
+        state_probs /= state_probs.sum()
         self.set_training_mode(True)
 
         self.optimize_actor(states, actions, log_probs, gaes, state_probs)
