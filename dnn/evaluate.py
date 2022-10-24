@@ -1,5 +1,6 @@
 import os
 import random
+import time
 
 from copy import deepcopy
 
@@ -190,8 +191,13 @@ class Evaluate:
         self.eval_obj.close()
 
     def evaluate(self, train_agent):
-        torch.manual_seed(self.eval_seed)
-        np.random.seed(self.eval_seed)
-        random.seed(self.eval_seed)
+        def set_seed(seed):
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            random.seed(seed)
 
-        return self.eval_obj.evaluate(train_agent)
+        set_seed(self.eval_seed)
+        wins, evaluation_rewards = self.eval_obj.evaluate(train_agent)
+        set_seed(time.time())
+
+        return wins, evaluation_rewards
