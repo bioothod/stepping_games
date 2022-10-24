@@ -46,6 +46,11 @@ config_ppo12.update({
     'num_features': 512,
     'hidden_dims': [128],
 })
+config_ppo18 = deepcopy(default_config)
+config_ppo18.update({
+    'num_features': 512,
+    'hidden_dims': [256],
+})
 
 def select_config_from_feature_model(feature_model_path):
     if feature_model_path.endswith('ppo6.py'):
@@ -60,6 +65,8 @@ def select_config_from_feature_model(feature_model_path):
         config = config_ppo9_multichannel
     elif feature_model_path.endswith('ppo12.py'):
         config = config_ppo12
+    elif feature_model_path.endswith('ppo18.py'):
+        config = config_ppo18
     else:
         raise ValueError(f'there is no matching config for the feature model path {feature_model_path}, please check how the name ends, it should end with ppo6.py or something similar')
 
