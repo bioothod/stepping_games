@@ -198,6 +198,6 @@ class Evaluate:
 
         set_seed(self.eval_seed)
         wins, evaluation_rewards = self.eval_obj.evaluate(train_agent)
-        set_seed(time.time())
+        set_seed(time.time_ns())
 
         return wins, evaluation_rewards
