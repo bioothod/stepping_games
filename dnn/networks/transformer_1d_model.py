@@ -134,18 +134,20 @@ class Model(nn.Module):
         num_features = config['num_features']
 
         input_dim = 3
+        self.d_model = 3
+        dim_feedforward = 32
+        dropout_rate = 0.
         self.seq_len = rows * columns
 
-        self.rotary = Rotary(input_dim)
+        self.rotary = Rotary(self.d_model)
 
-        encoder_layer = nn.TransformerEncoderLayer(d_model=input_dim, nhead=3, dim_feedforward=128, dropout=0, activation='gelu')
-        self.encoder = nn.TransformerEncoder(encoder_layer=encoder_layer, num_layers=8)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=self.d_model + 2, nhead=1, dim_feedforward=dim_feedforward, dropout=dropout_rate, activation='gelu')
+        self.encoder = nn.TransformerEncoder(encoder_layer=encoder_layer, num_layers=16)
 
         self.decoder_projection = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(input_dim * self.seq_len, num_features),
+            nn.Linear((self.d_model + 2) * self.seq_len, num_features),
             nn.GELU(),
-            nn.LayerNorm([num_features], eps=1e-6, elementwise_affine=True),
         )
 
     def _generate_square_subsequent_mask(self, sz, shift=0):
@@ -163,18 +165,22 @@ class Model(nn.Module):
 
         batch_size, num_channels = game_states.shape[:2]
 
-        states = game_states.view(batch_size, num_channels, self.seq_len)
-
+        state = game_states.view(batch_size, num_channels, self.seq_len)
 
         # [B, Fin, L] -> [L, B, Fin]
-        src = states.permute((2, 0, 1))
+        src = state.permute((2, 0, 1))
+
         cos, sin = self.rotary(src, 0)
+        #print(f'embs: {embs.shape}, src: {src.shape}, cos: {cos.shape}')
 
+        #src = apply_rotary_pos_emb(src, cos, sin)
+
+        cos = cos[..., :1]
+        sin = sin[..., :1]
+        cos = torch.tile(cos, [1, batch_size, 1])
+        sin = torch.tile(sin, [1, batch_size, 1])
         #print(f'src: {src.shape}, cos: {cos.shape}, sin: {sin.shape}')
-
-        cos = cos[..., :num_channels]
-        sin = sin[..., :num_channels]
-        src = apply_rotary_pos_emb(src, cos, sin)
+        src = torch.cat([src, cos, sin], 2)
 
         #mask = self._generate_square_subsequent_mask(seq_len, 30).to(seq.device)
         mask = self._generate_square_subsequent_mask(self.seq_len).to(game_states.device)
