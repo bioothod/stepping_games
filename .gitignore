@@ -104,3 +104,10 @@ ENV/
 tags
 \#*\#
 *~
+.#*
+TAGS
+checkpoints*/
+*.ckpt
+root/
+submission.tar.gz
+tensorboard_logs/
