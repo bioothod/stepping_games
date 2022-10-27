@@ -38,6 +38,8 @@ class PER:
         self._update_beta()
 
         num_entries = len(self.td_errors)
+        if num_entries <= batch_size:
+            return torch.arange(num_entries)
 
         if self.rank_based:
             # td_errors are sorted in descending order, so the first entry has the largest error, hence the largest priority
