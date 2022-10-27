@@ -116,7 +116,7 @@ class PPO(train_selfplay.BaseTrainer):
             self.logger.info(f'initial evaluation metric against {self.eval_agent_name}: '
                              f'max_eval_metric: {self.max_eval_metric:.2f}, '
                              f'mean: {self.max_mean_eval_metric:.4f}, '
-                             f'max_score_metric: {self.max_score_metric}, '
+                             f'max_score_metric: {self.max_score_metric:.1f}, '
                              f'evaluation time: {eval_time:.1f} sec')
 
         self.copy_weights()
@@ -156,7 +156,9 @@ class PPO(train_selfplay.BaseTrainer):
         self.critic_opt.load_state_dict(checkpoint['critic_optimizer_state_dict'])
 
         if 'global_step' in checkpoint:
-            self.global_step = checkpoint['global_step']
+            self.global_step *= 0
+            self.global_step += checkpoint['global_step']
+
             self.train_env.total_games_completed = checkpoint['total_games_completed']
             self.max_eval_metric = checkpoint['max_eval_metric']
             self.max_mean_eval_metric = checkpoint['max_mean_eval_metric']
@@ -215,7 +217,7 @@ class PPO(train_selfplay.BaseTrainer):
 
                 kl = (log_probs - pred_log_probs_all).mean()
                 kls.append(kl.item())
-                if kl.item() > self.config.policy_stopping_kl:
+                if kl.item() > self.config.policy_stopping_kl and total_sampled > num_samples*2:
                     break
 
         mean_policy_loss = np.mean(policy_losses)
@@ -294,7 +296,8 @@ class PPO(train_selfplay.BaseTrainer):
                 mse_returns.append(mse_ret.item())
 
                 if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
-                    break
+                    if total_sampled > num_samples * 2:
+                        break
 
         mean_value_loss = np.mean(value_losses)
         mean_mse_values = np.mean(mse_values)
