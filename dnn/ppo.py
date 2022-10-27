@@ -12,7 +12,6 @@ import torch.nn as nn
 import connectx_impl
 import networks
 from print_networks import print_networks
-from prioritized_replay_buffer import PER
 from rl_agents import Actor, Critic
 import train_selfplay
 
@@ -72,6 +71,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'batch_size': 1024*16,
             'experience_buffer_to_batch_size_ratio': 2,
+            'train_break_after_num_sampled': 4,
         })
 
         self.config.tensorboard_log_dir = os.path.join(self.config.checkpoints_dir, 'tensorboard_logs')
@@ -80,8 +80,6 @@ class PPO(train_selfplay.BaseTrainer):
             first_run = False
 
         self.global_step = torch.zeros(1).long()
-
-        self.per = PER()
 
         super().__init__(self.config)
         self.name = 'ppo'
@@ -166,24 +164,8 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.logger.info(f'{self.name}: loaded checkpoint {checkpoint_path}')
 
-    def actor_loss(self, states, actions, log_probs, gaes):
-        pred_log_probs, pred_entropies = self.actor.get_predictions_from_states(states, actions)
-        ratios = (pred_log_probs - log_probs).exp()
-        pi_obj = gaes * ratios
-        pi_obj_clipped = gaes * ratios.clamp(1 - self.config.policy_clip_range, 1 + self.config.policy_clip_range)
-
-        policy_loss = -torch.min(pi_obj, pi_obj_clipped)
-        entropy_loss = -pred_entropies * self.config.entropy_loss_weight
-
-        loss = policy_loss + entropy_loss
-        return policy_loss.mean(), entropy_loss.mean(), loss, pred_log_probs
-
     def optimize_actor(self, states, actions, log_probs, gaes, state_probs):
         num_samples = len(actions)
-
-        with torch.no_grad():
-            _, _, total_loss, _ = self.actor_loss(states, actions, log_probs, gaes)
-        self.per.initial_store(total_loss)
 
         policy_losses = []
         entropy_losses = []
@@ -191,8 +173,7 @@ class PPO(train_selfplay.BaseTrainer):
         kls = []
         total_sampled = 0
         for optimization_step in range(self.config.policy_optimization_steps):
-            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
-            batch_indexes = self.per.sample(self.config.batch_size)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_batch = states[batch_indexes]
@@ -201,8 +182,18 @@ class PPO(train_selfplay.BaseTrainer):
             gaes_batch = gaes[batch_indexes]
 
             self.actor_opt.zero_grad()
-            policy_loss, entropy_loss, total_loss, _ = self.actor_loss(states_batch, actions_batch, log_probs_batch, gaes_batch)
-            total_loss = total_loss.mean()
+            pred_log_probs, pred_entropies = self.actor.get_predictions_from_states(states_batch, actions_batch)
+            ratios = (pred_log_probs - log_probs_batch).exp()
+            pi_obj = gaes_batch * ratios
+            pi_obj_clipped = gaes * ratios.clamp(1 - self.config.policy_clip_range, 1 + self.config.policy_clip_range)
+
+            policy_loss = -torch.min(pi_obj, pi_obj_clipped)
+            entropy_loss = -pred_entropies * self.config.entropy_loss_weight
+
+            policy_loss = policy_loss.mean()
+            entropy_loss = entropy_loss.mean()
+
+            total_loss = policy_loss + entropy_loss
             total_loss.backward()
             nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.max_gradient_norm)
             self.actor_opt.step()
@@ -212,12 +203,11 @@ class PPO(train_selfplay.BaseTrainer):
             total_losses.append(total_loss.item())
 
             with torch.no_grad():
-                _, _, total_loss, pred_log_probs_all = self.actor_loss(states, actions, log_probs, gaes)
-                self.per.initial_store(total_loss)
+                pred_log_probs_all, _ = self.actor.get_predictions_from_states(states, actions)
 
                 kl = (log_probs - pred_log_probs_all).mean()
                 kls.append(kl.item())
-                if kl.item() > self.config.policy_stopping_kl and total_sampled > num_samples*2:
+                if kl.item() > self.config.policy_stopping_kl and total_sampled > num_samples * self.config.train_break_after_num_sampled:
                     break
 
         mean_policy_loss = np.mean(policy_losses)
@@ -243,22 +233,8 @@ class PPO(train_selfplay.BaseTrainer):
                          f'kl: {mean_kl:.3f}, '
                          f'stopping_kl: {self.config.policy_stopping_kl}')
 
-    def critic_loss(self, states, returns, values):
-        pred_values = self.critic(states)
-        pred_values_clipped = values + (pred_values - values).clamp(-self.config.value_clip_range, self.config.value_clip_range)
-
-        v_loss = (returns - pred_values).pow(2)
-        v_loss_clipped = (returns - pred_values_clipped).pow(2)
-        value_loss = torch.max(v_loss, v_loss_clipped).mul(0.5)
-
-        return value_loss, pred_values
-
     def optimize_critic(self, states, returns, values, state_probs):
         num_samples = len(states)
-
-        with torch.no_grad():
-            total_loss, _ = self.critic_loss(states, returns, values)
-        self.per.initial_store(total_loss)
 
         value_losses = []
         mse_values = []
@@ -266,8 +242,7 @@ class PPO(train_selfplay.BaseTrainer):
         total_sampled = 0
 
         for optimization_step in range(self.config.value_optimization_steps):
-            #batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
-            batch_indexes = self.per.sample(self.config.batch_size)
+            batch_indexes = np.random.choice(num_samples, min(num_samples, self.config.batch_size), replace=False, p=state_probs)
             total_sampled += len(batch_indexes)
 
             states_batch = states[batch_indexes]
@@ -276,7 +251,12 @@ class PPO(train_selfplay.BaseTrainer):
 
             self.critic_opt.zero_grad()
 
-            value_loss, _ = self.critic_loss(states_batch, returns_batch, values_batch)
+            pred_values = self.critic(states_batch)
+            pred_values_clipped = values_batch + (pred_values - values_batch).clamp(-self.config.value_clip_range, self.config.value_clip_range)
+
+            v_loss = (returns_batch - pred_values).pow(2)
+            v_loss_clipped = (returns_batch - pred_values_clipped).pow(2)
+            value_loss = torch.max(v_loss, v_loss_clipped).mul(0.5)
             value_loss = value_loss.mean()
             value_loss.backward()
             nn.utils.clip_grad_norm_(self.critic.parameters(), self.config.max_gradient_norm)
@@ -286,8 +266,7 @@ class PPO(train_selfplay.BaseTrainer):
             value_losses.append(value_loss)
 
             with torch.no_grad():
-                total_loss, pred_values_all = self.critic_loss(states, returns, values)
-                self.per.initial_store(total_loss)
+                pred_values_all = self.critic(states)
 
                 mse_val = (values - pred_values_all).pow(2).mul(0.5).mean()
                 mse_ret = (returns - pred_values_all).pow(2).mul(0.5).mean()
@@ -296,7 +275,7 @@ class PPO(train_selfplay.BaseTrainer):
                 mse_returns.append(mse_ret.item())
 
                 if mse_val.item() > self.config.value_stopping_mse or mse_ret.item() > self.config.value_stopping_mse:
-                    if total_sampled > num_samples * 2:
+                    if total_sampled > num_samples * self.config.train_break_after_num_sampled:
                         break
 
         mean_value_loss = np.mean(value_losses)
