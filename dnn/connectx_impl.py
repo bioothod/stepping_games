@@ -315,68 +315,60 @@ class ConnectX:
 
         self.total_games_completed += int(dones.sum().cpu().numpy())
 
-    def dump(self, actor, critic, summary_writer, summary_prefix, global_step):
+    def dump(self, player_id, actor, critic, summary_writer, summary_prefix, global_step):
         game_index = self.completed_index()
 
-        ret_states = []
         ret_actions = []
         ret_log_probs = []
         ret_gaes = []
         ret_returns = []
         ret_rewards = []
-        ret_values = []
 
         net_device = next(critic.parameters()).device
 
-        for player_id, player_stat in self.player_stats.items():
-            player_states = []
-            for game_id in game_index:
-                episode_len = player_stat.episode_len[game_id]
-                states = player_stat.states[game_id, :episode_len, ...]
-                player_states.append(states)
+        player_stat = self.player_stats[player_id]
 
-            with torch.no_grad():
-                player_states = torch.cat(player_states, 0).to(net_device)
-                states = actor.create_state(player_id, player_states).to(net_device)
-                values = critic(states).detach()
+        player_states = []
+        for game_id in game_index:
+            episode_len = player_stat.episode_len[game_id]
+            states = player_stat.states[game_id, :episode_len, ...]
+            player_states.append(states)
 
-                ret_states.append(states)
-                ret_values.append(values)
-
-        ret_states = torch.cat(ret_states, 0)
-        ret_values = torch.cat(ret_values, 0)
+        with torch.no_grad():
+            player_states = torch.cat(player_states, 0).to(net_device)
+            ret_states = actor.create_state(player_id, player_states).to(net_device)
+            ret_values = critic(ret_states).detach()
 
         ret_values_cpu = ret_values.cpu()
 
         summary = defaultdict(list)
         values_index_start = 0
-        for player_stat in self.player_stats.values():
-            for game_id in game_index:
-                episode_len = player_stat.episode_len[game_id]
+        for game_id in game_index:
+            episode_len = player_stat.episode_len[game_id]
 
-                actions = player_stat.actions[game_id, :episode_len]
-                log_probs = player_stat.log_probs[game_id, :episode_len]
-                rewards = player_stat.rewards[game_id, :episode_len]
-                next_value = player_stat.next_values[game_id, episode_len-1]
+            actions = player_stat.actions[game_id, :episode_len]
+            log_probs = player_stat.log_probs[game_id, :episode_len]
+            rewards = player_stat.rewards[game_id, :episode_len]
+            next_value = player_stat.next_values[game_id, episode_len-1]
 
-                values = ret_values_cpu[values_index_start : values_index_start + episode_len]
-                values_index_start += episode_len
+            values = ret_values_cpu[values_index_start : values_index_start + episode_len]
+            values_index_start += episode_len
 
-                returns, gaes = calculate_rewards(values, rewards, next_value, len(player_stat.states), self.gamma, self.tau)
+            returns, gaes = calculate_rewards(values, rewards, next_value, len(player_stat.states), self.gamma, self.tau)
 
-                returns = torch.tensor(returns).float()
-                gaes = torch.tensor(gaes).float()
+            returns = torch.tensor(returns).float()
+            gaes = torch.tensor(gaes).float()
 
-                ret_actions.append(actions)
-                ret_log_probs.append(log_probs)
-                ret_gaes.append(gaes)
-                ret_returns.append(returns)
-                ret_rewards.append(rewards)
+            ret_actions.append(actions)
+            ret_log_probs.append(log_probs)
+            ret_gaes.append(gaes)
+            ret_returns.append(returns)
+            ret_rewards.append(rewards)
 
-                exploration = player_stat.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
+            exploration = player_stat.explorations[game_id, :episode_len].float().sum() / float(episode_len) * 100
 
-                summary['rewards'].append(rewards.sum())
-                summary['exploration'].append(exploration)
+            summary['rewards'].append(rewards.sum())
+            summary['exploration'].append(exploration)
 
         ret_actions = torch.cat(ret_actions, 0).to(net_device)
         ret_rewards = torch.cat(ret_rewards, 0).to(net_device)

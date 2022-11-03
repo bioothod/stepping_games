@@ -98,11 +98,12 @@ class MultiprocessEval:
         return wins, evaluation_rewards
 
 class DNNEval:
-    def __init__(self, config, num_evaluations, agent, summary_writer, global_step):
+    def __init__(self, config, num_evaluations, agent, summary_writer, global_step, summary_prefix):
         import connectx_impl
 
         self.summary_writer = summary_writer
         self.global_step = global_step
+        self.summary_prefix = summary_prefix
 
         self.num_evaluations = num_evaluations
         self.agent = agent
@@ -122,6 +123,7 @@ class DNNEval:
 
     def evaluate(self, train_agent):
         train_agent.set_training_mode(False)
+        self.agent.train(False)
 
         self.eval_env.reset()
 
@@ -162,18 +164,18 @@ class DNNEval:
         mean_evaluation_reward = float(np.mean(evaluation_rewards))
         self.max_mean_episode_reward = max(self.max_mean_episode_reward, mean_evaluation_reward)
 
-        self.summary_writer.add_scalar(f'eval/wins', wins, self.global_step)
-        self.summary_writer.add_scalars(f'eval/episode_rewards', {
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/wins', wins, self.global_step)
+        self.summary_writer.add_scalars(f'{self.summary_prefix}/episode_rewards', {
             'mean': mean_evaluation_reward,
             'max': self.max_mean_episode_reward,
         }, self.global_step)
-        self.summary_writer.add_scalar(f'eval/episode_len', self.eval_env.episode_len.float().mean(), self.global_step)
-        self.summary_writer.add_scalar(f'eval/exploration', np.mean(evaluation_explorations), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/episode_len', self.eval_env.episode_len.float().mean(), self.global_step)
+        self.summary_writer.add_scalar(f'{self.summary_prefix}/exploration', np.mean(evaluation_explorations), self.global_step)
 
         return wins, evaluation_rewards
 
 class Evaluate:
-    def __init__(self, config, logger, num_evaluations, eval_agent, summary_writer, global_step):
+    def __init__(self, config, logger, num_evaluations, eval_agent, summary_writer, global_step, summary_prefix):
         self.eval_seed = config.eval_seed
 
         self.logger = logger
@@ -185,7 +187,7 @@ class Evaluate:
         if isinstance(eval_agent, str):
             self.eval_obj = MultiprocessEval(config, num_evaluations, eval_agent, summary_writer, global_step)
         else:
-            self.eval_obj = DNNEval(config, num_evaluations, eval_agent, summary_writer, global_step)
+            self.eval_obj = DNNEval(config, num_evaluations, eval_agent, summary_writer, global_step, summary_prefix)
 
     def close(self):
         self.eval_obj.close()
