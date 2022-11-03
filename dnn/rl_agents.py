@@ -167,7 +167,12 @@ class Actor(nn.Module):
                 batch = states[start_index:, ...]
             else:
                 batch = states[start_index:start_index+self.batch_size, ...]
-            ret = self.forward_one(batch)
+            try:
+                ret = self.forward_one(batch)
+            except:
+                print(f'states: {states.shape}, start_index: {start_index}, rest: {rest}, batch: {batch.shape}, prev_logits: {[l.shape for l in return_logits]}')
+                raise
+
             return_logits.append(ret)
 
             start_index += len(batch)
