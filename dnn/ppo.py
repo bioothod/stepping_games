@@ -22,7 +22,7 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'checkpoints_dir': 'checkpoints_ppo_24',
+            'checkpoints_dir': 'checkpoints_ppo_25',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
@@ -49,13 +49,13 @@ class PPO(train_selfplay.BaseTrainer):
             'init_lr': 1e-5,
 
             'num_features': 512,
-            'hidden_dims': [128],
+            'hidden_dims': [256],
 
             'max_gradient_norm': 1.0,
 
             'num_training_games': 1024*2,
 
-            'batch_size': 1024*12,
+            'batch_size': 1024*8,
             'experience_buffer_to_batch_size_ratio': 2,
         })
 
@@ -70,7 +70,7 @@ class PPO(train_selfplay.BaseTrainer):
         self.name = 'ppo'
 
         def feature_model_creation_func(config):
-            model = networks.simple3_model.Model(config)
+            model = networks.simple4_model.Model(config)
             return model
 
         self.actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
