@@ -11,8 +11,7 @@ class Model(nn.Module):
         columns = config['columns']
         num_features = config['num_features']
 
-        num_output_conv_features = 512
-        #num_input_linear_features = num_output_conv_features * 4
+        num_output_conv_features = 1024
         num_input_linear_features = num_output_conv_features * (rows - 3) * columns
 
         self.conv_encoder = nn.Sequential(
@@ -28,22 +27,25 @@ class Model(nn.Module):
             nn.GELU(),
             nn.BatchNorm2d(64),
 
-            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
-
             nn.Conv2d(64, 128, 3, padding='same', padding_mode='zeros'),
             nn.GELU(),
             nn.BatchNorm2d(128),
+
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
 
             nn.Conv2d(128, 256, 3, padding='same', padding_mode='zeros'),
             nn.GELU(),
             nn.BatchNorm2d(256),
 
-            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
-
             nn.Conv2d(256, 512, 3, padding='same', padding_mode='zeros'),
             nn.GELU(),
             nn.BatchNorm2d(512),
 
+            nn.MaxPool2d(kernel_size=(2, 1), stride=(2, 1), padding=(1, 0)),
+
+            nn.Conv2d(512, 1024, 3, padding='same', padding_mode='zeros'),
+            nn.GELU(),
+            nn.BatchNorm2d(1024),
         )
 
         self.linear_encoder = nn.Sequential(
