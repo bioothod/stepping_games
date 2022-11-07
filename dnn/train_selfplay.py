@@ -63,9 +63,6 @@ class BaseTrainer:
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
 
-    def copy_weights(self):
-        return
-
     def run_epoch(self, train_env, train_agent):
         training_started = False
 
@@ -114,7 +111,6 @@ class BaseTrainer:
 
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
                 train_agent.save(checkpoint_path)
-                self.copy_weights()
 
                 self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {train_agent.name} -> {checkpoint_path}')
 
@@ -122,7 +118,6 @@ class BaseTrainer:
                 self.max_score_metric = best_score
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_best_score.ckpt')
                 train_agent.save(checkpoint_path)
-                self.copy_weights()
 
                 self.logger.info(f'max_score_metric: {best_score:.2f}, saved {train_agent.name} -> {checkpoint_path}')
 

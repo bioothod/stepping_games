@@ -74,11 +74,9 @@ class PPO(train_selfplay.BaseTrainer):
             return model
 
         self.actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
-        self.best_actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
         self.actor_opt = torch.optim.AdamW(self.actor.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
-        self.best_critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.AdamW(self.critic.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
 
         if first_run:
@@ -105,14 +103,6 @@ class PPO(train_selfplay.BaseTrainer):
     def set_training_mode(self, training):
         self.actor.train(training)
         self.critic.train(training)
-
-    def copy_weights_one(self, dst_model, src_model):
-        for dst, src in zip(dst_model.parameters(), src_model.parameters()):
-            dst.data = src.data.detach().clone()
-
-    def copy_weights(self):
-        self.copy_weights_one(self.best_actor, self.actor)
-        self.copy_weights_one(self.best_critic, self.critic)
 
     def save(self, checkpoint_path):
         torch.save({
