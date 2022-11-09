@@ -98,8 +98,6 @@ class PPO(train_selfplay.BaseTrainer):
                              f'max_score_metric: {self.max_score_metric}, '
                              f'evaluation time: {eval_time:.1f} sec')
 
-        self.copy_weights()
-
     def set_training_mode(self, training):
         self.actor.train(training)
         self.critic.train(training)
