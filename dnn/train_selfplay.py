@@ -62,11 +62,7 @@ class BaseTrainer:
     def try_train(self):
         raise NotImplementedError('method @try_train() needs to be implemented')
 
-    def copy_weights(self):
-        raise NotImplementedError('method @copy_weights() needs to be implemented')
-        return
-
-    def run_epoch(self, train_envs, train_agent):
+    def run_epoch(self, train_env, train_agent):
         training_started = False
 
         for _ in range(self.config.eval_after_train_steps):
@@ -75,25 +71,15 @@ class BaseTrainer:
             training_started = self.try_train()
 
         if training_started:
-            all_eval_metric = []
-            all_eval_rewards = []
-            total_games_completed = 0
+            mean_rewards, std_rewards, mean_explorations, std_explorations, mean_timesteps, std_timesteps = train_env.completed_games_stats()
+            if len(mean_rewards) == 0:
+                return
 
-            for train_env_idx, train_env in enumerate(train_envs):
-                mean_rewards, std_rewards, mean_explorations, std_explorations, mean_timesteps, std_timesteps = train_env.completed_games_stats()
-                if len(mean_rewards) == 0:
-                    return
+            total_games_completed = train_env.total_games_completed
 
-                total_games_completed += train_env.total_games_completed
-
-                train_agent.set_training_mode(False)
-                eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
-                all_eval_metric.append(eval_metric)
-                all_eval_rewards.append(eval_rewards)
-
-            eval_metric = np.mean(all_eval_metric)
-            mean_eval_score = np.mean(all_eval_rewards)
-            std_eval_score = np.std(all_eval_rewards)
+            train_agent.set_training_mode(False)
+            eval_metric, eval_rewards = self.evaluation.evaluate(train_agent)
+            mean_eval_score = np.mean(eval_rewards)
 
             best_score, good_score = self.evaluation.score_eval_ds.evaluate(train_agent.actor, debug=False)
             self.summary_writer.add_scalars('eval/score_metric', {
@@ -104,7 +90,7 @@ class BaseTrainer:
             if eval_metric >= self.max_eval_metric or best_score >= self.max_score_metric or mean_eval_score > self.max_mean_eval_metric:
                 self.logger.info(f'games: {total_games_completed:6d}: '
                                  f'eval: '
-                                 f'r: {mean_eval_score:7.4f}\u00B1{std_eval_score:4.2f} / {self.max_mean_eval_metric:7.4f}, '
+                                 f'r: {mean_eval_score:7.4f} / {self.max_mean_eval_metric:7.4f}, '
                                  f'metric: {eval_metric:2.0f} / {self.max_eval_metric:2.0f}, '
                                  f'best_score: {best_score:.2f} / {self.max_score_metric:.2f}, good_score: {good_score:.2f}'
                                  )
@@ -115,7 +101,6 @@ class BaseTrainer:
 
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_{eval_metric:.0f}.ckpt')
                 train_agent.save(checkpoint_path)
-                #self.copy_weights()
 
                 self.logger.info(f'eval_metric: {eval_metric:.0f}, saved {train_agent.name} -> {checkpoint_path}')
 
@@ -123,7 +108,6 @@ class BaseTrainer:
                 self.max_score_metric = best_score
                 checkpoint_path = os.path.join(self.config.checkpoints_dir, f'{train_agent.name}_best_score.ckpt')
                 train_agent.save(checkpoint_path)
-                #self.copy_weights()
 
                 self.logger.info(f'max_score_metric: {best_score:.2f}, saved {train_agent.name} -> {checkpoint_path}')
 

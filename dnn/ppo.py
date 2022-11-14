@@ -25,7 +25,7 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'checkpoints_dir': 'checkpoints_ppo_26',
+            'checkpoints_dir': 'checkpoints_ppo_27',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
@@ -43,7 +43,7 @@ class PPO(train_selfplay.BaseTrainer):
 
             'entropy_loss_weight': 0.1,
 
-            'weight_decay': 1e-2,
+            'weight_decay': 1e-3,
 
             'gamma': 0.999,
             'tau': 0.97,
@@ -51,30 +51,16 @@ class PPO(train_selfplay.BaseTrainer):
 
             'init_lr': 1e-5,
 
-            'num_games_to_stop_training_state_model': 100_000_000,
-
-            'channels': 3,
-            'num_layers': 4,
-            'hidden_size': 512,
-            'filter_size': 1024,
-            'decoder_dropout': 0.,
-            'total_key_depth': 64,
-            'total_value_depth': 64,
-            'attn_num_heads': 2,
-            'attn_type': 'global',
-            'distr': 'cat',
-
-
             'num_features': 512,
-            'hidden_dims': [128],
+            'hidden_dims': [256],
 
             'max_gradient_norm': 1.0,
 
             'num_training_games': 1024*3,
 
             'batch_size': 1024*16,
-            'experience_buffer_to_batch_size_ratio': 3,
-            'train_break_after_num_sampled': 5,
+            'experience_buffer_to_batch_size_ratio': 2,
+            'train_break_after_num_sampled': 1,
         })
 
         self.config.tensorboard_log_dir = os.path.join(self.config.checkpoints_dir, 'tensorboard_logs')
@@ -89,47 +75,20 @@ class PPO(train_selfplay.BaseTrainer):
 
         def feature_model_creation_func(config):
             model = networks.simple3_model.Model(config)
-            #model = networks.transformer_1d_model.Model(config)
             return model
 
 
         self.actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
-        self.best_actor = Actor(self.config, feature_model_creation_func).to(self.config.device)
-        self.actor_opt = torch.optim.AdamW(self.actor.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=self.config.init_lr)
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
-        self.best_critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
-        self.critic_opt = torch.optim.AdamW(self.critic.parameters(), lr=self.config.init_lr, weight_decay=self.config.weight_decay)
+        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
             self.logger.info(f'critic:\n{print_networks("critic", self.critic, verbose=True)}')
 
-        self.prev_agent = evaluate_score.AgentWrapper(self.config, self.logger, self.best_actor, self.best_critic, 0)
-
-        self.train_env = []
-        self.train_env_player_ids = []
-        self.actors = []
-        self.critics = []
-        self.minievals = []
-
-        for player_id in self.config.player_ids:
-            self.train_env.append(connectx_impl.ConnectX(self.config))
-            self.train_env_player_ids.append(player_id)
-
-            config = deepcopy(self.config)
-            config.train_player_id = player_id
-            minieval = evaluate.Evaluate(config, self.logger, 100, self.prev_agent, self.summary_writer, self.global_step, f'train_{player_id}')
-            self.minievals.append(minieval)
-
-        self.actors = [
-            [self.actor, self.best_actor],
-            [self.best_actor, self.actor],
-        ]
-        self.critics = [
-            [self.critic, self.best_critic],
-            [self.best_critic, self.critic],
-        ]
+        self.train_env = connectx_impl.ConnectX(self.config)
 
         model_loaded = self.try_load(self.name, self)
 
@@ -144,33 +103,18 @@ class PPO(train_selfplay.BaseTrainer):
                              f'max_score_metric: {self.max_score_metric:.1f}, '
                              f'evaluation time: {eval_time:.1f} sec')
 
-        self.copy_weights()
-
     def set_training_mode(self, training):
         self.actor.train(training)
         self.critic.train(training)
 
-    def copy_weights_one(self, dst_model, src_model):
-        dst_model.load_state_dict(src_model.state_dict())
-        #for dst, src in zip(dst_model.parameters(), src_model.parameters()):
-        #    dst.data = src.data.detach().clone()
-
-    def copy_weights(self):
-        self.copy_weights_one(self.best_actor, self.actor)
-        self.copy_weights_one(self.best_critic, self.critic)
-
     def save(self, checkpoint_path):
-        total_games_completed = []
-        for train_env in self.train_env:
-            total_games_completed.append(train_env.total_games_completed)
-
         torch.save({
             'actor_state_dict': self.actor.state_dict(),
             'actor_optimizer_state_dict': self.actor_opt.state_dict(),
             'critic_state_dict': self.critic.state_dict(),
             'critic_optimizer_state_dict': self.critic_opt.state_dict(),
             'global_step': self.global_step,
-            'total_games_completed': total_games_completed,
+            'total_games_completed': self.train_env.total_games_completed,
             'max_eval_metric': self.max_eval_metric,
             'max_mean_eval_metric': self.max_mean_eval_metric,
             'max_score_metric': self.max_score_metric,
@@ -189,8 +133,7 @@ class PPO(train_selfplay.BaseTrainer):
             self.global_step *= 0
             self.global_step += checkpoint['global_step']
 
-            for train_env, total_games_completed in zip(self.train_env, checkpoint['total_games_completed']):
-                train_env.total_games_completed = total_games_completed
+            self.train_env.total_games_completed = checkpoint['total_games_completed']
 
             self.max_eval_metric = checkpoint['max_eval_metric']
             self.max_mean_eval_metric = checkpoint['max_mean_eval_metric']
@@ -345,8 +288,8 @@ class PPO(train_selfplay.BaseTrainer):
         all_values = []
         all_returns = []
 
-        for train_env_player_id, train_env in zip(self.train_env_player_ids, self.train_env):
-            game_index, states, actions, log_probs, gaes, values, returns = train_env.dump(train_env_player_id, self.actor, self.critic,
+        for train_env_player_id in self.config.player_ids:
+            game_index, states, actions, log_probs, gaes, values, returns = self.train_env.dump(train_env_player_id, self.actor, self.critic,
                                                                                            self.summary_writer, f'train_{train_env_player_id}', self.global_step)
 
 
@@ -408,10 +351,10 @@ class PPO(train_selfplay.BaseTrainer):
                     new_states.append(states[index[0]])
                     new_actions.append(actions[index[0]])
 
-                    new_log_probs.append(log_probs[index].mean(0))
-                    new_gaes.append(gaes[index].mean(0))
-                    new_values.append(values[index].mean(0))
-                    new_returns.append(returns[index].mean(0))
+                    new_log_probs.append(log_probs[index].max(0)[0])
+                    new_gaes.append(gaes[index].max(0)[0])
+                    new_values.append(values[index].max(0)[0])
+                    new_returns.append(returns[index].max(0)[0])
 
                 states = torch.stack(new_states, 0).to(states.device)
                 actions = torch.Tensor(new_actions).to(states.device)
@@ -427,16 +370,6 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.optimize_actor(states, actions, log_probs, gaes, state_probs)
         self.optimize_critic(states, returns, values, state_probs)
-
-        eval_metrics = []
-        for player_id, minieval in zip(self.config.player_ids, self.minievals):
-            eval_metric, eval_rewards = minieval.evaluate(self)
-            eval_metrics.append(eval_metric)
-
-        eval_metric = np.mean(eval_metrics)
-        if eval_metric > 51:
-            self.logger.info(f'minieval: mean_eval_metric: {eval_metric}, eval_metrics: {eval_metrics}, copying weights')
-            self.copy_weights()
 
         self.global_step += 1
 
@@ -471,36 +404,23 @@ class PPO(train_selfplay.BaseTrainer):
         train_env.update_game_rewards(player_id, game_index, game_states, actions, log_probs, rewards, dones, next_values, explorations)
 
     def make_step(self):
-        for train_env, actors, critics in zip(self.train_env, self.actors, self.critics):
-            for player_id, actor, critic in zip(self.config.player_ids, actors, critics):
-                self.make_single_step_and_save(train_env, player_id, actor, critic)
+        for player_id in self.config.player_ids:
+            self.make_single_step_and_save(self.train_env, player_id, self.actor, self.critic)
 
     def fill_episode_buffer(self):
-        for train_env in self.train_env:
-            train_env.reset()
+        self.train_env.reset()
 
         requested_states_size = self.config.batch_size * self.config.experience_buffer_to_batch_size_ratio
         winning_rate = float(self.max_eval_metric) / 100. * 1.5
-        number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len * len(self.train_env)
+        number_of_states = winning_rate * self.config.num_training_games * self.config.max_episode_len
         number_of_states_or_requested_states = max(number_of_states, requested_states_size)
 
         while True:
             self.make_step()
 
-            total_games_completed = 0
-            completed_games = 0
-            completed_states = 0
-            total_running_games = 0
-            running_games = 0
-            for train_env in self.train_env:
-                num_running_games = len(train_env.running_index())
-                total_running_games += num_running_games
-
-                num_completed_games, num_completed_states = train_env.completed_games_and_states()
-                completed_games += num_completed_games
-                completed_states += num_completed_states
-
-                total_games_completed += train_env.total_games_completed
+            total_games_completed = self.train_env.total_games_completed
+            completed_games, completed_states = self.train_env.completed_games_and_states()
+            running_games = len(self.train_env.running_index())
 
             self.logger.debug(f'fill_episode_buffer: '
                               f'total_games_completed: {total_games_completed}'
@@ -509,19 +429,10 @@ class PPO(train_selfplay.BaseTrainer):
                               f'completed_states: {completed_states}, '
                               f'requested_size {requested_states_size}')
 
-            #if completed_states >= number_of_states_or_requested_states:
-            #    break
-            if total_running_games == 0:
+            if completed_states >= number_of_states_or_requested_states:
                 break
-
-        if total_games_completed > self.config.num_games_to_stop_training_state_model:
-            if self.actor.train_state_features:
-                self.logger.info(f'total_completed_games: {total_games_completed}, '
-                                 f'num_games_to_stop_training_state_model: {self.config.num_games_to_stop_training_state_model}: '
-                                 f'finishing training the state model')
-
-            self.actor.train_state_features = False
-
+            if running_games == 0:
+                break
 
         self.summary_writer.add_scalar('train_iterations/completed_games', completed_games, self.global_step)
         self.summary_writer.add_scalars('train_iterations/completed_states', {
