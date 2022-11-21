@@ -51,6 +51,11 @@ config_ppo18.update({
     'num_features': 512,
     'hidden_dims': [256],
 })
+config_ppo27 = deepcopy(default_config)
+config_ppo27.update({
+    'num_features': 512,
+    'hidden_dims': [256],
+})
 
 def select_config_from_feature_model(feature_model_path):
     if feature_model_path.endswith('ppo6.py'):

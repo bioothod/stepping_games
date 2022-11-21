@@ -17,9 +17,8 @@ class CombinedModel(nn.Module):
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            #('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
-            ('rl_agents_ppo18.py', 'feature_model_ppo18.py', 'checkpoint_ppo_18_best_score_77.7.ckpt', utils.config_ppo18),
-            ('rl_agents_ppo12.py', 'feature_model_ppo12.py', 'submission_12_ppo83_critic.ckpt', utils.config_ppo12),
+            ('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
+            ('rl_agents_ppo27.py', 'feature_model_ppo27.py', 'submission_27_ppo90_critic.ckpt', utils.config_ppo27),
         ]
 
         self.actors = []
@@ -32,7 +31,7 @@ class CombinedModel(nn.Module):
                 checkpoint_path = os.path.join(kaggle_prefix, checkpoint_path)
 
             create_critic = False
-            if rl_model_path.endswith('ppo12.py'):
+            if rl_model_path.endswith('ppo27.py'):
                 create_critic = True
 
             actor, critic = utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic)
