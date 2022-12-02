@@ -11,7 +11,7 @@ class Critic(nn.Module):
         self.batch_size = config['batch_size']
         self.state_features_model = state_features_model
 
-        hidden_dims = [config['num_features']] + config['hidden_dims'] + [1]
+        hidden_dims = [config['num_features']] + config['hidden_dims']
 
         modules = []
 
@@ -21,8 +21,10 @@ class Critic(nn.Module):
 
             l = nn.Linear(input_dim, output_dim)
             modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
+            modules.append(nn.LeakyReLU())
 
+        modules.append(nn.Linear(hidden_dims[-1], 1))
+        modules.append(nn.Tanh())
         self.values = nn.Sequential(*modules)
 
     def forward_one(self, inputs):
@@ -67,7 +69,7 @@ class Actor(nn.Module):
         self.train_state_features = True
         self.state_features_model = feature_model_creation_func(config)
 
-        hidden_dims = [config['num_features']] + config['hidden_dims'] + [config['num_actions']]
+        hidden_dims = [config['num_features']] + config['hidden_dims']
         modules = []
 
         for i in range(1, len(hidden_dims)):
@@ -76,8 +78,9 @@ class Actor(nn.Module):
 
             l = nn.Linear(input_dim, output_dim)
             modules.append(l)
-            modules.append(nn.ReLU(inplace=True))
+            modules.append(nn.LeakyReLU())
 
+        modules.append(nn.Linear(hidden_dims[-1], config['num_actions']))
         self.features = nn.Sequential(*modules)
 
     def state_features(self, inputs):
