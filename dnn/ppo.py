@@ -1,3 +1,5 @@
+from typing import Optional
+
 from collections import defaultdict
 import itertools
 import os
@@ -25,7 +27,7 @@ class PPO(train_selfplay.BaseTrainer):
             'player_ids': [1, 2],
             'train_player_id': 1,
 
-            'checkpoints_dir': 'checkpoints_ppo_28',
+            'checkpoints_dir': 'checkpoints_ppo_29',
             'eval_agent_template': 'submission/feature_model_ppo6.py:submission/rl_agents_ppo6.py:checkpoints_simple3_ppo_6/ppo_100.ckpt',
             'score_evaluation_dataset': 'refmoves1k_kaggle',
 
@@ -40,6 +42,8 @@ class PPO(train_selfplay.BaseTrainer):
             'value_optimization_steps': 10,
             'value_clip_range': float('inf'),
             'value_stopping_mse': 0.85,
+
+            'enable_reference_move_training': True,
 
             'entropy_loss_weight': 0.1,
 
@@ -83,6 +87,26 @@ class PPO(train_selfplay.BaseTrainer):
 
         self.critic = Critic(self.config, self.actor.state_features_model).to(self.config.device)
         self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=self.config.init_lr)
+
+        if self.config.enable_reference_move_training:
+            self.actor_ref_opt = torch.optim.Adam(self.actor.parameters(), lr=self.config.init_lr)
+            self.ref_loss_ce = torch.nn.CrossEntropyLoss()
+            self.ref_best_moves = torch.zeros(len(self.evaluation.score_eval_ds.best_moves), self.config.num_actions, dtype=torch.float32, device=self.config.device)
+            self.ref_good_moves = torch.zeros(len(self.evaluation.score_eval_ds.good_moves), self.config.num_actions, dtype=torch.float32, device=self.config.device)
+            for idx, (best_moves, good_moves) in enumerate(zip(self.evaluation.score_eval_ds.good_moves, self.evaluation.score_eval_ds.best_moves)):
+                self.ref_best_moves[idx, best_moves] = 1. / len(best_moves)
+                self.ref_good_moves[idx, good_moves] = 1. / len(good_moves)
+
+            self.ref_game_states: Optional[torch.Tensor] = None
+            for i, player_id in enumerate(self.config.player_ids):
+                player_idx = torch.arange(len(self.ref_good_moves))[self.evaluation.score_eval_ds.game_player_ids == player_id]
+                game_states = self.evaluation.score_eval_ds.game_states[player_idx]
+                states = self.actor.create_state(player_id, game_states)
+                if i == 0:
+                    self.ref_game_states = torch.zeros([len(self.ref_good_moves)] + list(states.shape[1:]), dtype=states.dtype, device=self.config.device)
+
+                self.ref_game_states[player_idx] = states.to(self.config.device)
+
 
         if first_run:
             self.logger.info(f'actor:\n{print_networks("actor", self.actor, verbose=True)}')
@@ -140,6 +164,25 @@ class PPO(train_selfplay.BaseTrainer):
             self.max_score_metric = checkpoint['max_score_metric']
 
         self.logger.info(f'{self.name}: loaded checkpoint {checkpoint_path}')
+
+    def optimize_actor_reference_moves(self):
+        self.actor_ref_opt.zero_grad()
+
+        pred_actions = self.actor.forward_from_states(self.ref_game_states)
+
+        best_actions_loss = self.ref_loss_ce(pred_actions, self.ref_best_moves)
+        good_actions_loss = self.ref_loss_ce(pred_actions, self.ref_good_moves)
+
+        loss = best_actions_loss + good_actions_loss
+        loss.backward()
+        self.actor_ref_opt.step()
+
+        self.summary_writer.add_scalars('train/ref_moves', {
+                'good': good_actions_loss.item(),
+                'best': best_actions_loss.item(),
+                'total': loss.item(),
+        }, self.global_step)
+
 
     def optimize_actor(self, states, actions, log_probs, gaes, state_probs):
         num_samples = len(actions)
@@ -367,6 +410,9 @@ class PPO(train_selfplay.BaseTrainer):
 
         state_probs /= state_probs.sum()
         self.set_training_mode(True)
+
+        if self.config.enable_reference_move_training:
+            self.optimize_actor_reference_moves()
 
         self.optimize_actor(states, actions, log_probs, gaes, state_probs)
         self.optimize_critic(states, returns, values, state_probs)
