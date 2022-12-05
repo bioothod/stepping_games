@@ -120,18 +120,22 @@ class EvaluationDataset:
         player_state_rates = ', '.join(player_state_rates)
         self.logger.info(f'states: {len(self.game_states)}, player_state_rates: {player_state_rates}')
 
-    def evaluate(self, actor, debug):
+    def run_greedy_prediction(self, actor):
         pred_actions = torch.zeros(len(self.game_states)).long().to(self.game_states.device)
         for player_id in self.player_ids:
             player_idx = torch.arange(len(self.game_states))[self.game_player_ids == player_id]
             player_states = self.game_states[player_idx]
 
             player_pred_actions = actor.greedy_actions(player_id, player_states)
-            if type(player_pred_actions) == list:
+            if isinstance(player_pred_actions, list):
                 player_pred_actions = torch.Tensor(player_pred_actions).long()
 
             pred_actions[player_idx] = player_pred_actions
 
+        return pred_actions
+
+    def evaluate(self, actor, debug):
+        pred_actions = self.run_greedy_prediction(actor)
         pred_actions = pred_actions.detach().cpu().numpy()
         best_count = 0
         good_count = 0
