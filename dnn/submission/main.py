@@ -17,8 +17,8 @@ class CombinedModel(nn.Module):
 
         kaggle_prefix = '/kaggle_simulations/agent/'
         model_paths = [
-            ('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
-            ('rl_agents_ppo28.py', 'feature_model_ppo28.py', 'submission_28_ppo95_critic.ckpt', utils.config_ppo28),
+            #('rl_agents_ppo9_multichannel.py', 'feature_model_ppo9_multichannel.py', 'submission_9_ppo86_multichannel_critic.ckpt', utils.config_ppo9_multichannel),
+            ('rl_agents_ppo29.py', 'feature_model_ppo29.py', 'submission_29_ppo96_critic.ckpt', utils.config_ppo29),
         ]
 
         self.actors = []
@@ -31,7 +31,7 @@ class CombinedModel(nn.Module):
                 checkpoint_path = os.path.join(kaggle_prefix, checkpoint_path)
 
             create_critic = False
-            if rl_model_path.endswith('ppo28.py'):
+            if rl_model_path.endswith('ppo29.py'):
                 create_critic = True
 
             actor, critic = utils.create_actor_critic(feature_model_path, rl_model_path, config, checkpoint_path, create_critic)
@@ -98,7 +98,8 @@ def create_game_from_observation(obs, config):
 from logger import setup_logger
 logger = setup_logger('test', None, True)
 
-mcts_actors = {player_id:Runner(mcts_config, actor, critic, logger=logger) for player_id in [1, 2]}
+#mcts_actors = {player_id:Runner(mcts_config, actor, critic, logger=logger) for player_id in [1, 2]}
+mcts_actors = {player_id:actor for player_id in [1, 2]}
 
 import connectx_impl
 game_state = torch.zeros((1, 1, mcts_config['rows'], mcts_config['columns'])).float()
@@ -113,8 +114,11 @@ new_game_state, rewards, dones = connectx_impl.step_games(game_state, player_id,
 
 def my_agent(observation, config):
     player_id, game_state = create_game_from_observation(observation, config)
+    game_state = game_state.unsqueeze(0)
     actions = mcts_actors[player_id].forward(player_id, game_state)
-    return actions[0]
+    actions = actions.detach().cpu().numpy()
+    actions = actions[0].argmax()
+    return actions
 
 if want_test:
     import kaggle_environments as kaggle
@@ -134,7 +138,7 @@ if want_test:
 
         for i in range(100):
             action = my_agent(observation, mcts_config)
-            observation, reward, done, info = game.step(action)
+            observation, reward, done, info = game.step([action])
             steps += 1
             if done:
                 break
